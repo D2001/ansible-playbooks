@@ -1,0 +1,64 @@
+---
+- name: Full Jellyfin backup with OneDrive upload, cleanup, and safe container handling
+  hosts: localhost
+  become: yes
+  vars:
+    jellyfin_dir: /home/karsten/jellyfin
+    backup_base_dir: /home/karsten/jellyfin_backups
+    timestamp: "{{ ansible_date_time.iso8601_basic_short }}"
+    backup_file: "jellyfin_service_backup_{{ timestamp }}.tar.gz"
+    rclone_remote: "onedrive:jellyfin_backups"
+    max_backups: 7
+
+  tasks:
+    - name: Stop Jellyfin via docker-compose
+      become_user: karsten
+      shell: docker-compose down
+      args:
+        chdir: "{{ jellyfin_dir }}"
+
+    - name: Ensure backup directory exists
+      file:
+        path: "{{ backup_base_dir }}"
+        state: directory
+        owner: karsten
+        group: karsten
+        mode: '0755'
+
+    - name: Create archive of entire Jellyfin directory
+      archive:
+        path: "{{ jellyfin_dir }}"
+        dest: "{{ backup_base_dir }}/{{ backup_file }}"
+        format: gz
+        owner: karsten
+        group: karsten
+        mode: '0644'
+
+    - name: Upload backup to OneDrive via rclone
+      become_user: karsten
+      shell: |
+        rclone copy "{{ backup_base_dir }}/{{ backup_file }}" "{{ rclone_remote }}"
+      args:
+        executable: /bin/bash
+
+    - name: Cleanup old local backups (keep latest {{ max_backups }})
+      become_user: karsten
+      shell: |
+        ls -1t {{ backup_base_dir }}/jellyfin_service_backup_*.tar.gz | tail -n +{{ max_backups + 1 }} | xargs -r rm --
+      args:
+        executable: /bin/bash
+
+    - name: Cleanup old OneDrive backups (keep latest {{ max_backups }})
+      become_user: karsten
+      shell: |
+        rclone lsf --format t "{{ rclone_remote }}" | grep '^jellyfin_service_backup_.*\.tar\.gz$' | sort -r | tail -n +{{ max_backups + 1 }} | while read file; do
+          rclone delete "{{ rclone_remote }}/$file"
+        done
+      args:
+        executable: /bin/bash
+
+    - name: Start Jellyfin via docker-compose
+      become_user: karsten
+      shell: docker-compose up -d
+      args:
+        chdir: "{{ jellyfin_dir }}"

@@ -1,0 +1,64 @@
+---
+- name: Backup Paperless-ngx and upload to OneDrive
+  hosts: localhost
+  become: yes
+
+  vars:
+    paperless_dir: /home/karsten/paperless
+    backup_dir: /home/karsten/paperless_backups
+    timestamp: "{{ ansible_date_time.iso8601_basic_short }}"
+    backup_file: "paperless_backup_{{ timestamp }}.tar.gz"
+    rclone_remote: "onedrive:paperless_backups"
+    max_backups: 7
+
+  tasks:
+    - name: Stop Paperless-ngx containers
+      become_user: karsten
+      shell: docker-compose down
+      args:
+        chdir: "{{ paperless_dir }}"
+
+    - name: Ensure local backup directory exists
+      file:
+        path: "{{ backup_dir }}"
+        state: directory
+        owner: karsten
+        group: karsten
+        mode: '0755'
+
+    - name: Create archive of the Paperless directory
+      archive:
+        path: "{{ paperless_dir }}"
+        dest: "{{ backup_dir }}/{{ backup_file }}"
+        format: gz
+        owner: karsten
+        group: karsten
+        mode: '0644'
+
+    - name: Upload archive to OneDrive with rclone
+      become_user: karsten
+      shell: rclone copy "{{ backup_dir }}/{{ backup_file }}" "{{ rclone_remote }}"
+      args:
+        executable: /bin/bash
+
+    - name: Remove old local backups (keep latest {{ max_backups }})
+      become_user: karsten
+      shell: |
+        ls -1t {{ backup_dir }}/paperless_backup_*.tar.gz | tail -n +{{ max_backups + 1 }} | xargs -r rm --
+      args:
+        executable: /bin/bash
+
+    - name: Remove old OneDrive backups (keep latest {{ max_backups }})
+      become_user: karsten
+      shell: |
+        rclone lsf --format t "{{ rclone_remote }}" | grep '^paperless_backup_.*\.tar\.gz$' | sort -r | tail -n +{{ max_backups + 1 }} | while read file; do
+          rclone delete "{{ rclone_remote }}/$file"
+        done
+      args:
+        executable: /bin/bash
+
+    - name: Start Paperless-ngx containers
+      become_user: karsten
+      shell: docker-compose up -d
+      args:
+        chdir: "{{ paperless_dir }}"

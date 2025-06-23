@@ -1,0 +1,92 @@
+---
+- name: Restore Paperless-ngx from latest OneDrive backup
+  hosts: localhost
+  become: yes
+
+  vars_prompt:
+    - name: confirm_restore
+      prompt: |
+        WARNING: This will DELETE your existing ~/paperless directory and replace it with the latest backup from OneDrive.
+        Type YES to proceed:
+      private: no
+
+  pre_tasks:
+    - name: Abort if not confirmed
+      fail:
+        msg: "Restore cancelled."
+      when: confirm_restore != "YES"
+
+  vars:
+    paperless_dir: /home/karsten/paperless
+    backup_dir: /home/karsten/paperless_backups
+    rclone_remote: "onedrive:paperless_backups"
+
+  tasks:
+    - name: Ensure backup directory exists
+      file:
+        path: "{{ backup_dir }}"
+        state: directory
+        owner: karsten
+        group: karsten
+        mode: '0755'
+
+    - name: Stop Paperless-ngx containers
+      become_user: karsten
+      shell: docker-compose down
+      args:
+        chdir: "{{ paperless_dir }}"
+
+    - name: Find latest backup on OneDrive
+      become_user: karsten
+      shell: |
+        rclone ls "{{ rclone_remote }}" | awk '{print $2}' | grep '^paperless_backup_.*\.tar\.gz$' | sort | tail -n 1
+      register: latest_backup
+      changed_when: false
+
+    - name: Fail if no backup found
+      fail:
+        msg: "No backups found on OneDrive!"
+      when: latest_backup.stdout == ""
+
+    - name: Download latest backup from OneDrive
+      become_user: karsten
+      shell: |
+        rclone copy "{{ rclone_remote }}/{{ latest_backup.stdout }}" "{{ backup_dir }}/"
+      args:
+        executable: /bin/bash
+
+    - name: Remove existing paperless directory
+      become: yes
+      file:
+        path: /home/karsten/paperless
+        state: absent
+
+    - name: Recreate paperless directory
+      become_user: karsten
+      file:
+        path: /home/karsten/paperless
+        state: directory
+        mode: '0755'
+
+    - name: Extract backup archive into ~/paperless
+      become_user: karsten
+      unarchive:
+        src: "{{ backup_dir }}/{{ latest_backup.stdout }}"
+        dest: "/home/karsten"
+        remote_src: no
+        extra_opts:
+          - --overwrite
+          - --no-same-owner
+          - --no-same-permissions
+
+    - name: Remove temp backup directory
+      become: yes
+      file:
+        path: "{{ backup_dir }}/"
+        state: absent
+
+    - name: Start Paperless-ngx containers
+      become_user: karsten
+      shell: docker-compose up -d
+      args:
+        chdir: "{{ paperless_dir }}"

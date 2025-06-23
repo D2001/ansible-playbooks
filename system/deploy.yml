@@ -1,0 +1,141 @@
+---
+- name: Redeploy Raspberry Pi server (Docker + WireGuard + rclone)
+  hosts: localhost
+  become: true
+
+  vars:
+    local_user: karsten
+    wg_interface: wg0
+    wg_config_src: wg0.conf
+
+  tasks:
+
+    - name: Install required packages
+      apt:
+        name:
+          - docker.io
+          - docker-compose
+          - rsync
+          - unzip
+          - git
+          - wireguard
+          - iptables-persistent
+        update_cache: true
+        state: present
+
+    - name: Ensure Docker service is running and enabled
+      service:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Add {{ local_user }} to docker group
+      user:
+        name: "{{ local_user }}"
+        groups: docker
+        append: true
+
+    # ─── rclone Setup ───────────────────────────────
+    - name: Set rclone platform arch
+      set_fact:
+        rclone_arch: >-
+          {{ (
+            'linux-arm64' if ansible_architecture == 'aarch64' else
+            'linux-arm'   if ansible_architecture in ['armv7l', 'armv6l'] else
+            'unsupported'
+          ) | trim }}
+
+    - name: Fail if unsupported architecture
+      fail:
+        msg: "Unsupported architecture: {{ ansible_architecture }}"
+      when: rclone_arch == 'unsupported'
+
+    - name: Install rclone (if not present)
+      shell: curl -fsSL https://rclone.org/install.sh | bash
+      args:
+        creates: /usr/bin/rclone
+
+    - name: Show rclone version
+      command: rclone version
+      register: rclone_version
+      changed_when: false
+
+    - name: Debug rclone version
+      debug:
+        var: rclone_version.stdout_lines
+
+    - name: Create rclone config directory
+      file:
+        path: "/home/{{ local_user }}/.config/rclone"
+        state: directory
+        owner: "{{ local_user }}"
+        group: "{{ local_user }}"
+        mode: "0700"
+
+    - name: Deploy rclone config for user
+      copy:
+        src: files/rclone.conf
+        dest: "/home/{{ local_user }}/.config/rclone/rclone.conf"
+        owner: "{{ local_user }}"
+        group: "{{ local_user }}"
+        mode: "0600"
+
+    - name: Copy rclone config to root
+      copy:
+        src: "/home/{{ local_user }}/.config/rclone/rclone.conf"
+        dest: /root/.config/rclone/rclone.conf
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0600"
+
+    # ─── WireGuard Setup ─────────────────────────────
+    # Check if wg-quick@wg0 is active
+    - name: Check if WireGuard interface {{ wg_interface }} is active
+      shell: systemctl is-active wg-quick@{{ wg_interface }}
+      register: wg_status
+      changed_when: false
+      failed_when: false
+
+    # Stop the interface if running
+    - name: Stop WireGuard interface before replacing config
+      service:
+        name: wg-quick@{{ wg_interface }}
+        state: stopped
+      when: wg_status.stdout == "active"
+
+    - name: Ensure wg0.conf is readable before copying
+      stat:
+        path: "{{ playbook_dir }}/files/{{ wg_config_src }}"
+      delegate_to: localhost
+      register: wg_conf_stat
+
+    - name: Fix permissions on wg0.conf if not readable by Ansible
+      file:
+        path: "{{ playbook_dir }}/files/{{ wg_config_src }}"
+        mode: '0644'
+      delegate_to: localhost
+      when: not wg_conf_stat.stat.readable
+
+    - name: Copy WireGuard client config (avoid permission error)
+      copy:
+        src: files/{{ wg_config_src }}
+        dest: "/etc/wireguard/{{ wg_interface }}.conf"
+        owner: root
+        group: root
+        mode: "0600"
+      become: true
+
+    - name: Ensure IPv4 forwarding is enabled
+      sysctl:
+        name: net.ipv4.ip_forward
+        value: "1"
+        sysctl_set: true
+        state: present
+        reload: true
+
+    - name: Enable and start WireGuard interface
+      service:
+        name: "wg-quick@{{ wg_interface }}"
+        state: started
+        enabled: true
