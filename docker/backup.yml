@@ -1,13 +1,12 @@
 ---
 - name: Backup Docker service and upload to OneDrive
   hosts: localhost
-  become: yes
 
   vars:
     service_name: "temp_service"
-    service_dir: "/home/karsten/{{ service_name }}"
-    backup_dir: "/home/karsten/{{ service_name }}_backups"
-    nas_backup_dir: "/mnt/{{ service_name }}/backup"
+    service_dir: "{{ ansible_env.HOME }}/{{ service_name }}"
+    backup_dir: "{{ ansible_env.HOME }}/backups/{{ service_name }}_backups"
+    nas_backup_dir: "/mnt/backups/{{ service_name }}"
     rclone_remote: "onedrive:{{ service_name }}_backups"
     backup_pattern: "{{ service_name }}_backup_*.tar.gz"
     compose_file: "{{ service_dir }}/docker-compose.yml"
@@ -17,7 +16,6 @@
 
   tasks:
     - name: Stop docker containers
-      become_user: karsten
       shell: docker-compose down
       args:
         chdir: "{{ service_dir }}"
@@ -30,7 +28,7 @@
         group: karsten
         mode: '0755'
 
-    - name: Create archive of the jellyfin directory
+    - name: Create archive of the {{ service_name }} directory
       archive:
         path: "{{ service_dir }}"
         dest: "{{ backup_dir }}/{{ backup_file }}"
@@ -40,7 +38,6 @@
         mode: '0644'
 
     - name: Copy backup archive to SMB share
-      become_user: karsten
       copy:
         src: "{{ backup_dir }}/{{ backup_file }}"
         dest: "/mnt/paperless/backup/{{ backup_file }}"
@@ -49,20 +46,17 @@
         mode: '0644'
 
     - name: Upload archive to OneDrive with rclone
-      become_user: karsten
       shell: rclone copy "{{ backup_dir }}/{{ backup_file }}" "{{ rclone_remote }}"
       args:
         executable: /bin/bash
 
     - name: Remove old local backups (keep latest {{ max_backups }})
-      become_user: karsten
       shell: |
         ls -1t {{ backup_dir }}/{{ backup_pattern }} | tail -n +{{ max_backups + 1 }} | xargs -r rm --
       args:
         executable: /bin/bash
 
     - name: Remove old nas backups (keep latest {{ max_backups }})
-      become_user: karsten
       shell: |
         ls -1t {{ nas_backup_dir }}/{{ backup_pattern }} | tail -n +{{ max_backups + 1 }} | xargs -r rm --
       args:
@@ -70,7 +64,6 @@
 
 
     - name: Remove old OneDrive backups (keep latest {{ max_backups }})
-      become_user: karsten
       shell: |
         rclone lsf --format t "{{ rclone_remote }}" | grep '^{{ service_name }}_backup_.*\.tar\.gz$' | sort -r | tail -n +{{ max_backups + 1 }} | while read file; do
           rclone delete "{{ rclone_remote }}/$file"
@@ -79,7 +72,6 @@
         executable: /bin/bash
 
     - name: Start docker containers
-      become_user: karsten
       shell: docker-compose up -d
       args:
         chdir: "{{ service_dir }}"

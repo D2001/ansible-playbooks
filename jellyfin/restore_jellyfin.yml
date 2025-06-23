@@ -19,7 +19,7 @@
   vars:
     service_name: jellyfin   # Override with -e "service_name=paperless"
     service_dir: "/home/karsten/{{ service_name }}"
-    backup_dir: "/home/karsten/{{ service_name }}_backups"
+    backup_dir: "/home/karsten/backups/{{ service_name }}_backups"
     nas_backup_dir: "/mnt/{{ service_name }}/backup"
     rclone_remote: "onedrive:{{ service_name }}_backups"
     backup_pattern: "{{ service_name }}_backup_*.tar.gz"

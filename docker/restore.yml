@@ -1,12 +1,11 @@
 ---
 - name: Restore Docker service from latest available backup (local, NAS, or OneDrive)
   hosts: localhost
-  become: yes
 
   vars_prompt:
     - name: confirm_restore
       prompt: |
-        WARNING: This will DELETE your existing ~/jellyfin directory and replace it with the latest backup.
+        WARNING: This will DELETE your existing service directory and replace it with the latest backup.
         Type YES to proceed:
       private: no
 
@@ -17,10 +16,10 @@
       when: confirm_restore != "YES"
 
   vars:
-    service_name: jellyfin   # Override with -e "service_name=paperless"
-    service_dir: "/home/karsten/{{ service_name }}"
-    backup_dir: "/home/karsten/{{ service_name }}_backups"
-    nas_backup_dir: "/mnt/{{ service_name }}/backup"
+    service_name: temp_service   # Override with -e "service_name=paperless"
+    service_dir: "{{ ansible_env.HOME }}/{{ service_name }}"
+    backup_dir: "{{ ansible_env.HOME }}/backups/{{ service_name }}_backups"
+    nas_backup_dir: "/mnt/backups/{{ service_name }}"
     rclone_remote: "onedrive:{{ service_name }}_backups"
     backup_pattern: "{{ service_name }}_backup_*.tar.gz"
     compose_file: "{{ service_dir }}/docker-compose.yml"
@@ -40,7 +39,6 @@
       register: service_compose
 
     - name: Stop {{ service_name }} containers
-      become_user: karsten
       shell: docker-compose down
       args:
         chdir: "{{ service_dir }}"
@@ -48,7 +46,6 @@
 
     # --- Find latest local backup ---
     - name: Find latest local backup
-      become_user: karsten
       shell: |
         ls -1t {{ backup_dir }}/{{ backup_pattern }} 2>/dev/null | head -n 1
       register: local_backup
@@ -56,7 +53,6 @@
 
     # --- Find latest NAS backup ---
     - name: Find latest NAS backup
-      become_user: karsten
       shell: |
         ls -1t {{ nas_backup_dir }}/{{ backup_pattern }} 2>/dev/null | head -n 1
       register: nas_backup
@@ -64,7 +60,6 @@
 
     # --- Find latest OneDrive backup ---
     - name: Find latest OneDrive backup
-      become_user: karsten
       shell: |
         rclone ls "{{ rclone_remote }}" | awk '{print $2}' | grep '^{{ service_name }}_backup_.*\.tar\.gz$' | sort | tail -n 1
       register: onedrive_backup
@@ -101,7 +96,6 @@
 
     # --- If restoring from OneDrive, download it to backup_dir ---
     - name: Download latest backup from OneDrive if needed
-      become_user: karsten
       shell: |
         rclone copy "{{ rclone_remote }}/{{ restore_file | basename | trim }}" "{{ backup_dir }}/"
       when: restore_source == "onedrive"
@@ -110,7 +104,6 @@
 
     # --- If restoring from NAS, copy it to backup_dir ---
     - name: Copy latest backup from NAS if needed
-      become_user: karsten
       shell: |
         cp "{{ restore_file | trim }}" "{{ backup_dir }}/"
       when: restore_source == "nas"
@@ -124,7 +117,6 @@
         state: absent
 
     - name: Recreate {{ service_name }} directory
-      become_user: karsten
       file:
         path: "{{ service_dir }}"
         state: directory
@@ -132,7 +124,6 @@
 
     # --- Extract backup archive into ~/jellyfin ---
     - name: Extract backup archive into ~/{{ service_name }}
-      become_user: karsten
       unarchive:
         src: "{{ backup_dir }}/{{ restore_file | basename | trim }}"
         dest: "{{ service_dir | dirname }}"
@@ -143,7 +134,6 @@
           - --no-same-permissions
 
     - name: Start {{ service_name }} containers
-      become_user: karsten
       shell: docker-compose up -d
       args:
         chdir: "{{ service_dir }}"
