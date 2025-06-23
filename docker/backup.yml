@@ -15,7 +15,7 @@
     max_backups: 7
 
   tasks:
-    - name: Stop docker containers
+    - name: Stop {{ service_name }} containers
       shell: docker-compose down
       args:
         chdir: "{{ service_dir }}"
@@ -37,10 +37,18 @@
         group: karsten
         mode: '0644'
 
+    - name: Ensure SMB share backup directory exists
+      file:
+        path: "{{ nas_backup_dir }}"
+        state: directory
+        owner: karsten
+        group: karsten
+        mode: '0755'
+
     - name: Copy backup archive to SMB share
       copy:
         src: "{{ backup_dir }}/{{ backup_file }}"
-        dest: "/mnt/paperless/backup/{{ backup_file }}"
+        dest: "{{ nas_backup_dir }}/{{ backup_file }}"
         owner: karsten
         group: karsten
         mode: '0644'
@@ -71,7 +79,7 @@
       args:
         executable: /bin/bash
 
-    - name: Start docker containers
+    - name: Start {{ service_name }} containers
       shell: docker-compose up -d
       args:
         chdir: "{{ service_dir }}"
