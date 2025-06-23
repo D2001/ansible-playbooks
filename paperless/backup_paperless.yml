@@ -57,6 +57,14 @@
       args:
         executable: /bin/bash
 
+    - name: Remove old nas backups (keep latest {{ max_backups }})
+      become_user: karsten
+      shell: |
+        ls -1t /mnt/paperless/backup/paperless_backup_*.tar.gz | tail -n +{{ max_backups + 1 }} | xargs -r rm --
+      args:
+        executable: /bin/bash
+
+
     - name: Remove old OneDrive backups (keep latest {{ max_backups }})
       become_user: karsten
       shell: |

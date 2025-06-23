@@ -31,11 +31,17 @@
         group: karsten
         mode: '0755'
 
+    - name: Check if Paperless directory exists
+      stat:
+        path: "{{ paperless_dir }}/docker-compose.yml"
+      register: paperless_compose
+
     - name: Stop Paperless-ngx containers
       become_user: karsten
       shell: docker-compose down
       args:
         chdir: "{{ paperless_dir }}"
+      when: paperless_compose.stat.exists
 
     # --- Find latest local backup ---
     - name: Find latest local backup
@@ -61,26 +67,26 @@
       register: onedrive_backup
       changed_when: false
 
-    # --- Set restore source and file ---
+    # --- Set restore source and file (local > NAS > OneDrive)
     - name: Set restore source and file (local > NAS > OneDrive)
       set_fact:
         restore_source: >-
-          {% if local_backup.stdout != "" %}
+          {% if local_backup.stdout | trim != "" %}
             local
-          {% elif nas_backup.stdout != "" %}
+          {% elif nas_backup.stdout | trim != "" %}
             nas
-          {% elif onedrive_backup.stdout != "" %}
+          {% elif onedrive_backup.stdout | trim != "" %}
             onedrive
           {% else %}
             none
           {% endif %}
         restore_file: >-
-          {% if local_backup.stdout != "" %}
-            {{ local_backup.stdout }}
-          {% elif nas_backup.stdout != "" %}
-            {{ nas_backup.stdout }}
-          {% elif onedrive_backup.stdout != "" %}
-            {{ onedrive_backup.stdout }}
+          {% if local_backup.stdout | trim != "" %}
+            {{ local_backup.stdout | trim }}
+          {% elif nas_backup.stdout | trim != "" %}
+            {{ nas_backup.stdout | trim }}
+          {% elif onedrive_backup.stdout | trim != "" %}
+            {{ onedrive_backup.stdout | trim }}
           {% else %}
             ""
           {% endif %}
@@ -122,17 +128,17 @@
         mode: '0755'
 
     # --- Extract backup archive into ~/paperless ---
-    - name: Extract backup archive into ~/jellyfin
+    - name: Extract backup archive into ~/paperless
       become_user: karsten
       unarchive:
-        src: "{{ backup_dir }}/{{ latest_backup.stdout }}"
-        dest: "/home/karsten"
+        src: "{{ (backup_dir + '/' + (restore_file | basename | trim)) }}"
+        dest: "{{ paperless_dir | dirname }}"
         remote_src: no
         extra_opts:
           - --overwrite
           - --no-same-owner
           - --no-same-permissions
-          
+
     - name: Start Paperless-ngx containers
       become_user: karsten
       shell: docker-compose up -d
