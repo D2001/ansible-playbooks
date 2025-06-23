@@ -79,12 +79,6 @@
           - --no-same-owner
           - --no-same-permissions
 
-    - name: Remove temp backup directory
-      become: yes
-      file:
-        path: "{{ backup_dir }}/"
-        state: absent
-
     - name: Start jellyfin containers
       become_user: karsten
       shell: docker-compose up -d

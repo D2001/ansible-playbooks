@@ -35,6 +35,15 @@
         group: karsten
         mode: '0644'
 
+    - name: Copy backup archive to SMB share
+      become_user: karsten
+      copy:
+        src: "{{ backup_dir }}/{{ backup_file }}"
+        dest: "/mnt/paperless/backup/{{ backup_file }}"
+        owner: karsten
+        group: karsten
+        mode: '0644'
+
     - name: Upload archive to OneDrive with rclone
       become_user: karsten
       shell: rclone copy "{{ backup_dir }}/{{ backup_file }}" "{{ rclone_remote }}"
