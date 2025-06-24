@@ -90,7 +90,7 @@ echo "Starting ansible-playbook: $PLAYBOOK" >&2
 echo "Arguments: $@" >&2
 echo "Log file: $LOGFILE" >&2
 
-ansible-playbook -vv "$PLAYBOOK" "$@" \
+ansible-playbook -v "$PLAYBOOK" "$@" \
   | ts "$TIMESTAMP_FORMAT" \
   | tee -a "$LOGFILE"
 
