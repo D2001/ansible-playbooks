@@ -3,6 +3,12 @@
 # Timestamped logging wrapper for ansible-playbook
 # -------------------------------------------------
 
+export HOME="/home/karsten"
+export PATH="/usr/local/bin:/usr/bin:/bin:/home/karsten/.local/bin"
+export ANSIBLE_CONFIG="/home/karsten/ansible-playbooks/ansible.cfg"
+
+
+# Set a full PATH that includes everything you need
 # ---------- USER SETTINGS ----------
 LOGDIR="/home/karsten/backups/logs"          # where logs are stored
 TIMESTAMP_FORMAT="[%Y-%m-%d %H:%M:%S]"       # per-line timestamp
@@ -53,7 +59,7 @@ done
 # ---------------------------------------------------------------------------
 
 RUN_TS=$(date '+%Y-%m-%d_%H-%M-%S')
-LOGFILE="${LOGDIR}/${SERVICE_NAME}_${PLAYBOOK_BASE}_${RUN_TS}.log"
+LOGFILE="${LOGDIR}/${SERVICE_NAME}_${PLAYBOOK_BASE}.log"
 
 mkdir -p "$LOGDIR" || {
     echo "ERROR: Cannot create log directory $LOGDIR" >&2
