@@ -13,6 +13,7 @@
     timestamp: "{{ ansible_date_time.iso8601_basic_short }}"
     backup_file: "{{ service_name }}_backup_{{ timestamp }}.tar.gz"
     max_backups: 7
+    log_path: "{{ ansible_env.HOME }}/backups/logs/{{ service_name }}_backup.log"
 
   tasks:
     - name: Stop {{ service_name }} containers

@@ -28,6 +28,7 @@
           - git
           - wireguard
           - iptables-persistent
+          - moreutils
         update_cache: true
         state: present
 

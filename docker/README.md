@@ -3,6 +3,70 @@
 This repository provides **Ansible playbooks** to backup and restore any Dockerized service (e.g., `jellyfin`, `paperless`, etc.) on your system.  
 The playbooks are fully generic: just set the `service_name` variable to match your service.
 
+
+run-ansible.sh – Ansible Playbook Runner with Timestamped Logging
+==================================================================
+
+Description:
+------------
+run-ansible.sh is a lightweight wrapper around ansible-playbook that:
+- Adds timestamps to each line of output
+- Saves logs to a file (default: /var/log/ansible-playbook.log)
+- Accepts all standard ansible-playbook arguments
+- Works well with tools like Logwatch, Logrotate, or custom parsers
+
+Features:
+---------
+- Line-by-line timestamping using 'ts' (from moreutils)
+- Supports -e, -t, --limit, and other Ansible options
+- Appends logs for traceability
+- Simple and portable
+
+Requirements:
+-------------
+- ansible installed
+- ts command (part of moreutils)
+- Write access to the log file (/var/log/ansible-playbook.log by default)
+
+To install 'ts' on Debian/Ubuntu:
+    sudo apt install moreutils
+
+Usage:
+------
+./run-ansible.sh <playbook.yml> [ansible-playbook options]
+
+Examples:
+---------
+Run a basic playbook:
+    ./run-ansible.sh site.yml
+
+Run with an extra variable:
+    ./run-ansible.sh backup.yml -e "service_name=paperless"
+
+Run a specific tag:
+    ./run-ansible.sh deploy.yml -t restart -e "env=prod"
+
+Logs:
+-----
+All output is timestamped and appended to:
+    /var/log/ansible-playbook.log
+
+To change the log path, modify the script:
+    LOGFILE="$HOME/ansible-playbook.log"
+
+Permissions:
+------------
+You may need to run the script with sudo if writing to /var/log:
+    sudo ./run-ansible.sh playbook.yml
+
+Example Log Output:
+-------------------
+[2025-06-24 18:00:42] TASK [Install nginx]
+[2025-06-24 18:00:43] changed: [web1]
+[2025-06-24 18:00:45] TASK [Ensure nginx is running]
+[2025-06-24 18:00:46] ok: [web1]
+
+
 ---
 
 ## Features
