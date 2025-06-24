@@ -3,24 +3,43 @@
 # Timestamped logging wrapper for ansible-playbook
 # -------------------------------------------------
 
+# Set environment for cron execution
 export HOME="/home/karsten"
 export PATH="/usr/local/bin:/usr/bin:/bin:/home/karsten/.local/bin"
 export ANSIBLE_CONFIG="/home/karsten/ansible-playbooks/ansible.cfg"
 
-
-# Set a full PATH that includes everything you need
+# Ensure we're in the right directory
+cd "/home/karsten/ansible-playbooks/docker" || {
+    echo "ERROR: Cannot change to ansible-playbooks/docker directory" >&2
+    exit 1
+}
 # ---------- USER SETTINGS ----------
 LOGDIR="/home/karsten/backups/logs"          # where logs are stored
 TIMESTAMP_FORMAT="[%Y-%m-%d %H:%M:%S]"       # per-line timestamp
 # ------------------------------------
 
+# Check for required commands
+for cmd in ansible-playbook ts; do
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+        echo "ERROR: Required command '$cmd' not found in PATH" >&2
+        exit 1
+    fi
+done
+
 # -- sanity check -----------------------------------------------------------
 if [[ -z "$1" ]]; then
-    echo "Usage: $0 <playbook.yml> [ansible-playbook options]" >&2
-    exit 1
+    # Default to backup.yml if no playbook specified (useful for cron)
+    PLAYBOOK="/home/karsten/ansible-playbooks/docker/backup.yml"
+    echo "No playbook specified, defaulting to: $PLAYBOOK" >&2
+else
+    PLAYBOOK="$1"; shift                     # $@ now holds extra ansible args
 fi
 
-PLAYBOOK="$1"; shift                         # $@ now holds extra ansible args
+# Check if playbook file exists
+if [[ ! -f "$PLAYBOOK" ]]; then
+    echo "ERROR: Playbook file '$PLAYBOOK' does not exist" >&2
+    exit 1
+fi
 PLAYBOOK_BASE=$(basename "$PLAYBOOK" .yml)   # e.g. backup, restore
 
 # --- pull service_name / service-name from the -e arguments ----------------
@@ -67,6 +86,15 @@ mkdir -p "$LOGDIR" || {
 }
 
 # --- run ansible with line-by-line timestamps, tee to log ------------------
+echo "Starting ansible-playbook: $PLAYBOOK" >&2
+echo "Arguments: $@" >&2
+echo "Log file: $LOGFILE" >&2
+
 ansible-playbook -vv "$PLAYBOOK" "$@" \
   | ts "$TIMESTAMP_FORMAT" \
   | tee -a "$LOGFILE"
+
+# Capture the exit status
+EXIT_CODE=${PIPESTATUS[0]}
+echo "Ansible playbook completed with exit code: $EXIT_CODE" >&2
+exit $EXIT_CODE

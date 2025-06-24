@@ -4,7 +4,7 @@
   become: yes
 
   vars:
-    service_name: "temp_service"
+    service_name: "jellyfin"
     service_dir: "/home/karsten/{{ service_name }}"
     backup_dir: "/home/karsten/{{ service_name }}_backups"
     nas_backup_dir: "/mnt/{{ service_name }}/backup"
