@@ -96,5 +96,5 @@ ansible-playbook -vv "$PLAYBOOK" "$@" \
 
 # Capture the exit status
 EXIT_CODE=${PIPESTATUS[0]}
-echo "Ansible playbook completed with exit code: $EXIT_CODE" >&2
+echo "[INFO] Ansible playbook completed with exit code: $EXIT_CODE" | ts "$TIMESTAMP_FORMAT" | tee -a "$LOGFILE"
 exit $EXIT_CODE
