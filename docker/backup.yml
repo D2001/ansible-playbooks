@@ -31,14 +31,57 @@
         group: karsten
         mode: '0755'
 
+    - name: Check for Docker volumes related to {{ service_name }}
+      shell: docker volume ls --format "{% raw %}{{.Name}}{% endraw %}" | grep "{{ service_name }}" || true
+      register: docker_volumes_result
+      failed_when: false
+      changed_when: false
+
     - name: Create archive of the {{ service_name }} directory
-      archive:
-        path: "{{ service_dir }}"
-        dest: "{{ backup_dir }}/{{ backup_file }}"
-        format: gz
-        owner: karsten
-        group: karsten
-        mode: '0644'
+      shell: |
+        cd "{{ service_dir | dirname }}"
+        tar czf "{{ backup_dir }}/{{ backup_file }}" "{{ service_name }}"
+      args:
+        executable: /bin/bash
+      when: docker_volumes_result.stdout_lines | length == 0
+
+    - name: Create temporary directory for volume backups
+      tempfile:
+        state: directory
+        suffix: _{{ service_name }}_backup
+      register: temp_backup_dir
+      when: docker_volumes_result.stdout_lines | length > 0
+
+    - name: Backup Docker volumes
+      shell: |
+        docker run --rm \
+          -v {{ item }}:/volume \
+          -v {{ temp_backup_dir.path }}:/backup \
+          alpine:latest \
+          tar czf /backup/{{ item }}.tar.gz -C /volume .
+      loop: "{{ docker_volumes_result.stdout_lines }}"
+      when: docker_volumes_result.stdout_lines | length > 0
+
+    - name: Create combined archive with service directory and volumes
+      shell: |
+        cd "{{ service_dir | dirname }}"
+        # Create uncompressed tar first
+        tar cf "{{ backup_dir }}/{{ backup_file }}.tmp" "{{ service_name }}"
+        cd {{ temp_backup_dir.path }}
+        # Append volume backups to uncompressed tar
+        tar rf "{{ backup_dir }}/{{ backup_file }}.tmp" *.tar.gz
+        # Compress the final archive
+        gzip "{{ backup_dir }}/{{ backup_file }}.tmp"
+        mv "{{ backup_dir }}/{{ backup_file }}.tmp.gz" "{{ backup_dir }}/{{ backup_file }}"
+      args:
+        executable: /bin/bash
+      when: docker_volumes_result.stdout_lines | length > 0
+
+    - name: Clean up temporary backup directory
+      file:
+        path: "{{ temp_backup_dir.path }}"
+        state: absent
+      when: docker_volumes_result.stdout_lines | length > 0
 
     - name: Ensure SMB share backup directory exists
       file:

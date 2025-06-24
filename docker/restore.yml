@@ -123,16 +123,53 @@
         state: directory
         mode: '0755'
 
-    # --- Extract backup archive into ~/jellyfin ---
-    - name: Extract backup archive into ~/{{ service_name }}
+    # --- Extract backup archive into ~/{{ service_name }} ---
+    - name: Create temporary directory for restore
+      tempfile:
+        state: directory
+        suffix: _{{ service_name }}_restore
+      register: temp_restore_dir
+
+    - name: Extract backup archive to temporary directory
       unarchive:
         src: "{{ backup_dir }}/{{ restore_file | basename | trim }}"
-        dest: "{{ service_dir | dirname }}"
+        dest: "{{ temp_restore_dir.path }}"
         remote_src: yes
         extra_opts:
           - --overwrite
           - --no-same-owner
           - --no-same-permissions
+
+    - name: Check for Docker volume backups in archive
+      shell: ls {{ temp_restore_dir.path }}/*.tar.gz 2>/dev/null || echo ""
+      register: volume_backups_found
+      changed_when: false
+
+    - name: Restore Docker volumes if found
+      shell: |
+        docker run --rm \
+          -v {{ item | basename | regex_replace('\.tar\.gz$', '') }}:/volume \
+          -v {{ temp_restore_dir.path }}:/backup \
+          alpine:latest \
+          sh -c "cd /volume && tar xzf /backup/{{ item | basename }}"
+      loop: "{{ volume_backups_found.stdout_lines }}"
+      when: volume_backups_found.stdout_lines | length > 0
+
+    - name: Remove volume backup files from temp directory
+      shell: rm -f {{ temp_restore_dir.path }}/*.tar.gz
+      when: volume_backups_found.stdout_lines | length > 0
+
+    - name: Move service directory files to final location
+      shell: |
+        cp -r "{{ temp_restore_dir.path }}/{{ service_name }}"/* "{{ service_dir }}/"
+        cp -r "{{ temp_restore_dir.path }}/{{ service_name }}"/.[!.]* "{{ service_dir }}/" 2>/dev/null || true
+      args:
+        executable: /bin/bash
+
+    - name: Clean up temporary restore directory
+      file:
+        path: "{{ temp_restore_dir.path }}"
+        state: absent
 
     - name: Start {{ service_name }} containers
       shell: docker-compose up -d

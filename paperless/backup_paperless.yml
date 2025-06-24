@@ -5,11 +5,21 @@
 
   vars:
     paperless_dir: /home/karsten/paperless
-    backup_dir: /home/karsten/paperless_backups
+    backup_dir: /home/karsten/backups/paperless_backups
     timestamp: "{{ ansible_date_time.iso8601_basic_short }}"
     backup_file: "paperless_backup_{{ timestamp }}.tar.gz"
     rclone_remote: "onedrive:paperless_backups"
-    max_backups: 7
+    nas_backup_dir: "/mnt/backups/paperless"
+    max_local_backups: 1
+    max_onedrive_backups: 7  
+    max_nas_backups: 30
+    # Docker volumes to backup
+    docker_volumes:
+      - paperless_paperless_data
+      - paperless_paperless_media
+      - paperless_paperless_pgdata
+      - paperless_paperless_redis
+      - paperless_paperless_export
 
   tasks:
     - name: Stop Paperless-ngx containers
@@ -26,20 +36,43 @@
         group: karsten
         mode: '0755'
 
-    - name: Create archive of the Paperless directory
-      archive:
-        path: "{{ paperless_dir }}"
-        dest: "{{ backup_dir }}/{{ backup_file }}"
-        format: gz
+    - name: Create temporary directory for volume backups
+      tempfile:
+        state: directory
+        suffix: _paperless_backup
+      register: temp_backup_dir
+
+    - name: Backup Docker volumes
+      shell: |
+        docker run --rm \
+          -v {{ item }}:/volume \
+          -v {{ temp_backup_dir.path }}:/backup \
+          alpine:latest \
+          tar czf /backup/{{ item }}.tar.gz -C /volume .
+      loop: "{{ docker_volumes }}"
+      become_user: karsten
+
+    - name: Create combined archive with config and volume data
+      shell: |
+        cd {{ temp_backup_dir.path }}
+        tar czf "{{ backup_dir }}/{{ backup_file }}" \
+          -C "{{ paperless_dir }}" docker-compose.yml .env \
+          -C {{ temp_backup_dir.path }} *.tar.gz
+      become_user: karsten
+
+    - name: Ensure SMB share backup directory exists
+      file:
+        path: "{{ nas_backup_dir }}"
+        state: directory
         owner: karsten
         group: karsten
-        mode: '0644'
+        mode: '0755'
 
     - name: Copy backup archive to SMB share
       become_user: karsten
       copy:
         src: "{{ backup_dir }}/{{ backup_file }}"
-        dest: "/mnt/paperless/backup/{{ backup_file }}"
+        dest: "{{ nas_backup_dir }}/{{ backup_file }}"
         owner: karsten
         group: karsten
         mode: '0644'
@@ -50,25 +83,29 @@
       args:
         executable: /bin/bash
 
-    - name: Remove old local backups (keep latest {{ max_backups }})
+    - name: Clean up temporary backup directory
+      file:
+        path: "{{ temp_backup_dir.path }}"
+        state: absent
+
+    - name: Remove old local backups (keep latest {{ max_local_backups }})
       become_user: karsten
       shell: |
-        ls -1t {{ backup_dir }}/paperless_backup_*.tar.gz | tail -n +{{ max_backups + 1 }} | xargs -r rm --
+        find {{ backup_dir }} -maxdepth 1 -type f -name 'paperless_backup_*.tar.gz' -printf '%T@ %p\n' | sort -nr | tail -n +{{ max_local_backups + 1 }} | cut -d' ' -f2- | xargs -r rm --
       args:
         executable: /bin/bash
 
-    - name: Remove old nas backups (keep latest {{ max_backups }})
+    - name: Remove old nas backups (keep latest {{ max_nas_backups }})
       become_user: karsten
       shell: |
-        ls -1t /mnt/paperless/backup/paperless_backup_*.tar.gz | tail -n +{{ max_backups + 1 }} | xargs -r rm --
+        ls -1t {{ nas_backup_dir }}/paperless_backup_*.tar.gz | tail -n +{{ max_nas_backups + 1 }} | xargs -r rm --
       args:
         executable: /bin/bash
 
-
-    - name: Remove old OneDrive backups (keep latest {{ max_backups }})
+    - name: Remove old OneDrive backups (keep latest {{ max_onedrive_backups }})
       become_user: karsten
       shell: |
-        rclone lsf --format t "{{ rclone_remote }}" | grep '^paperless_backup_.*\.tar\.gz$' | sort -r | tail -n +{{ max_backups + 1 }} | while read file; do
+        rclone lsf --format t "{{ rclone_remote }}" | grep '^paperless_backup_.*\.tar\.gz$' | sort -r | tail -n +{{ max_onedrive_backups + 1 }} | while read file; do
           rclone delete "{{ rclone_remote }}/$file"
         done
       args:
