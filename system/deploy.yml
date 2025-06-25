@@ -22,15 +22,18 @@
       apt:
         name:
           - docker.io
-          - docker-compose
+          - docker-compose-plugin  # Modern Docker Compose V2
           - rsync
           - unzip
           - git
           - wireguard
           - iptables-persistent
           - moreutils
+          - pigz
+          - cifs-utils 
         update_cache: true
         state: present
+      tags: packages
 
     - name: Ensure Docker service is running and enabled
       service:
@@ -43,6 +46,23 @@
         name: "{{ local_user }}"
         groups: docker
         append: true
+
+    # ─── Ansible Collections Setup ───────────────────────────
+    - name: Install required Ansible collections for backup system
+      shell: |
+        ansible-galaxy collection install community.general community.docker --upgrade
+      become_user: "{{ local_user }}"
+      become: false
+      ignore_errors: true
+      register: galaxy_install
+      changed_when: "'Nothing to do' not in galaxy_install.stdout"
+      tags: ansible_collections
+
+    - name: Display collection installation result
+      debug:
+        msg: "{{ galaxy_install.stdout_lines }}"
+      when: galaxy_install.stdout_lines is defined
+      tags: ansible_collections
 
     # ─── rclone Setup ───────────────────────────────
     - name: Set rclone platform arch
@@ -150,11 +170,6 @@
         enabled: true
 
     # ─── SMB Share Setup ─────────────────────────────
-    - name: Ensure cifs-utils is installed
-      apt:
-        name: cifs-utils
-        state: present
-
     - name: Ensure mount point for paperless exists
       file:
         path: "{{ mount_paperless }}"

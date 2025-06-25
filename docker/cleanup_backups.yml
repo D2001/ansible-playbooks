@@ -1,0 +1,89 @@
+---
+# Cleanup old backups in parallel
+- name: Remove old local backups (keep only latest)
+  shell: |
+    find {{ backup_dir }} -maxdepth 1 -type f -name '{{ backup_pattern }}' -printf '%T@ %p\n' | sort -nr | tail -n +{{ max_local_backups + 1 }} | cut -d' ' -f2- | xargs -r rm -v --
+  args:
+    executable: /bin/bash
+  async: 60
+  poll: 0
+  register: cleanup_local_job
+
+- name: Remove old NAS backups (keep latest {{ max_nas_backups }})
+  shell: |
+    find {{ nas_backup_dir }} -maxdepth 1 -type f -name '{{ backup_pattern }}' -printf '%T@ %p\n' | sort -nr | tail -n +{{ max_nas_backups + 1 }} | cut -d' ' -f2- | xargs -r rm -v --
+  args:
+    executable: /bin/bash
+  async: 60
+  poll: 0
+  register: cleanup_nas_job
+
+- name: Remove old OneDrive backups (keep latest {{ max_onedrive_backups }})
+  shell: |
+    # Check if OneDrive remote exists and has files
+    if ! rclone lsf "{{ rclone_remote }}" >/dev/null 2>&1; then
+      echo "OneDrive remote not accessible or empty, skipping cleanup"
+      exit 0
+    fi
+    
+    # Get list of backup files from OneDrive, sorted by date (newest first)
+    files_to_delete=$(rclone lsf "{{ rclone_remote }}" | \
+      grep '^{{ service_name }}_backup_.*\.tar\.gz$' | \
+      sort -r | \
+      tail -n +{{ max_onedrive_backups + 1 }})
+    
+    if [ -z "$files_to_delete" ]; then
+      echo "No old backups to delete from OneDrive"
+      exit 0
+    fi
+    
+    echo "Files to delete from OneDrive:"
+    echo "$files_to_delete"
+    
+    echo "$files_to_delete" | while read -r file; do
+      if [ -n "$file" ]; then
+        echo "Deleting: $file"
+        if rclone delete "{{ rclone_remote }}/$file"; then
+          echo "Successfully deleted: $file"
+        else
+          echo "Failed to delete: $file"
+        fi
+      fi
+    done
+  args:
+    executable: /bin/bash
+  async: 300
+  poll: 0
+  register: cleanup_onedrive_job
+
+- name: Wait for local cleanup to complete
+  async_status:
+    jid: "{{ cleanup_local_job.ansible_job_id }}"
+  register: cleanup_local_result
+  until: cleanup_local_result.finished
+  retries: 12
+  delay: 5
+
+- name: Wait for NAS cleanup to complete
+  async_status:
+    jid: "{{ cleanup_nas_job.ansible_job_id }}"
+  register: cleanup_nas_result
+  until: cleanup_nas_result.finished
+  retries: 12
+  delay: 5
+
+- name: Wait for OneDrive cleanup to complete
+  async_status:
+    jid: "{{ cleanup_onedrive_job.ansible_job_id }}"
+  register: cleanup_onedrive_result
+  until: cleanup_onedrive_result.finished
+  retries: 60
+  delay: 5
+
+- name: Display cleanup results
+  debug:
+    msg: |
+      Cleanup completed:
+      - Local: {{ cleanup_local_result.stdout_lines | default([]) | length }} files removed
+      - NAS: {{ cleanup_nas_result.stdout_lines | default([]) | length }} files removed  
+      - OneDrive: cleanup completed (check logs for details)

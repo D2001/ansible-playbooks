@@ -1,0 +1,8 @@
+# Ansible Collections Requirements for Optimized Backup Script
+collections:
+  - name: community.general
+    version: ">=5.0.0"
+
+# Note: Removed community.docker dependency to avoid compatibility issues
+# The script now uses standard shell commands for Docker operations
+# Install with: ansible-galaxy collection install -r requirements.yml

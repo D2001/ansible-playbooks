@@ -2,7 +2,8 @@ SYSTEM (Ansible Playbook)
 ===============================================
 
 This Ansible playbook automates the setup and redeployment of a Raspberry Pi
-server, including Docker, WireGuard, and rclone configuration.
+server, including Docker, WireGuard, rclone configuration, and SMB shares.
+It also installs required Ansible collections for the backup system.
 It is intended to be run locally and includes secure handling of 
 sensitive files using Ansible Vault.
 
@@ -15,19 +16,21 @@ system/
 ├── deploy.yml             # Main playbook
 └── files/
     ├── rclone.conf        # Encrypted rclone configuration
-    └── wg0.conf           # Encrypted WireGuard configuration
+    ├── wg0.conf           # Encrypted WireGuard configuration
+    └── smb_credentials    # Encrypted SMB credentials
 
 ------------------------------------------------------------
 
 Features
 --------
 
-- Installs essential packages: docker.io, docker-compose, rsync, wireguard, etc.
-- Ensures Docker is running and adds the user 'karsten' to the docker group.
-- Installs rclone with architecture detection.
-- Deploys rclone config for both the user and root securely.
-- Sets up and enables WireGuard VPN with the wg0 interface.
-- Enables IPv4 forwarding required for VPN functionality.
+- **Package Installation**: Docker, WireGuard, rclone, backup tools (pigz, moreutils)
+- **Docker Setup**: Ensures Docker is running and adds user to docker group
+- **Ansible Collections**: Installs required collections for backup system (community.general, community.docker)
+- **rclone Configuration**: Installs and configures rclone with architecture detection
+- **WireGuard VPN**: Sets up and enables WireGuard with IPv4 forwarding
+- **SMB Shares**: Configures and mounts NAS shares for paperless, backups, and public data
+- **Security**: Uses Ansible Vault for sensitive configuration files
 
 ------------------------------------------------------------
 

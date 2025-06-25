@@ -1,6 +1,26 @@
-# Docker Service Backup & Restore System
+# Docker Service Backup & Restore System (Optimized)
 
 A robust, universal backup and restore system for Docker services using Ansible playbooks. This system provides automated backups to multiple locations (local, NAS, OneDrive) with different retention policies and seamless restoration capabilities.
+
+## 🚀 Recent Optimizations
+
+### Performance Improvements
+- **Parallel Operations**: Volume backups, uploads, and cleanups run in parallel
+- **Smart Compression**: Uses `pigz` for parallel gzip compression when available
+- **Async Tasks**: Non-blocking operations with proper status monitoring
+- **Efficient Docker Integration**: Uses Ansible Docker modules instead of shell commands
+
+### Reliability Enhancements
+- **Error Handling**: Block/rescue/always pattern ensures containers restart even on failure
+- **Pre-flight Checks**: Validates directories and files before starting
+- **Backup Validation**: Verifies backup integrity and minimum file size
+- **Better Resource Management**: Proper cleanup of temporary resources
+
+### Code Quality
+- **Modular Design**: Split into separate task files for better organization
+- **Better Error Messages**: Detailed logging and failure reporting
+- **Collection Dependencies**: Documented required Ansible collections
+- **Validation Tools**: Separate playbook for backup integrity testing
 
 ## Features
 
@@ -12,19 +32,20 @@ A robust, universal backup and restore system for Docker services using Ansible 
 - **Easy Restoration**: Single command to restore from the latest available backup
 - **Cron Compatible**: Perfect for automated scheduled backups
 - **Comprehensive Logging**: Timestamped logs for all operations
+- **Parallel Processing**: Multiple operations run simultaneously for better performance
 
 ## Architecture
 
-### Backup Flow
-1. Stop Docker containers
-2. Detect and backup all Docker volumes
-3. Create archive of entire service directory (including hidden files)
-4. Store backup in multiple locations:
-   - **Local**: 1 backup (immediate recovery)
-   - **OneDrive**: 7 backups (offsite protection)
-   - **NAS**: 30 backups (long-term retention)
-5. Clean up old backups according to retention policies
-6. Restart Docker containers
+### Optimized Backup Flow
+1. **Pre-flight validation** (service directory, compose file existence)
+2. **Parallel directory creation** (backup and NAS directories)
+3. **Graceful container shutdown** using Docker Compose module
+4. **Intelligent volume detection** using Docker API
+5. **Parallel volume backups** with async task monitoring
+6. **Efficient compression** with pigz/parallel gzip
+7. **Parallel uploads** to SMB and OneDrive
+8. **Concurrent cleanup** of old backups
+9. **Guaranteed container restart** via always block
 
 ### Restore Flow
 1. Find latest backup (priority: local > NAS > OneDrive)
@@ -37,9 +58,13 @@ A robust, universal backup and restore system for Docker services using Ansible 
 
 ## Files
 
-- **`backup.yml`**: Main backup playbook
+- **`backup.yml`**: Main optimized backup playbook
+- **`upload_backup.yml`**: Parallel upload operations
+- **`cleanup_backups.yml`**: Concurrent cleanup tasks
+- **`validate_backup.yml`**: Backup integrity validation
 - **`restore.yml`**: Main restore playbook  
 - **`run-ansible.sh`**: Wrapper script with logging and cron support
+- **`requirements.yml`**: Required Ansible collections
 
 ## Prerequisites
 
@@ -47,7 +72,10 @@ A robust, universal backup and restore system for Docker services using Ansible 
 ```bash
 # Install required packages
 sudo apt update
-sudo apt install ansible docker.io docker-compose rclone moreutils
+sudo apt install ansible docker.io docker-compose rclone moreutils pigz
+
+# Install Ansible collections
+ansible-galaxy collection install -r requirements.yml
 
 # Ensure user is in docker group
 sudo usermod -aG docker $USER

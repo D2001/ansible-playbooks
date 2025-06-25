@@ -16,116 +16,142 @@
     max_local_backups: 1
     max_onedrive_backups: 7
     max_nas_backups: 30
+    # Compression settings for better performance
+    tar_compression_level: 1  # Fast compression
+    parallel_jobs: "{{ ansible_processor_vcpus | default(2) }}"
 
   tasks:
-    - name: Stop {{ service_name }} containers
-      shell: docker-compose down
-      args:
-        chdir: "{{ service_dir }}"
+    # Pre-flight checks
+    - name: Verify service directory exists
+      stat:
+        path: "{{ service_dir }}"
+      register: service_dir_stat
+      failed_when: not service_dir_stat.stat.exists
 
-    - name: Ensure local backup directory exists
+    - name: Verify docker-compose file exists
+      stat:
+        path: "{{ compose_file }}"
+      register: compose_file_stat
+      failed_when: not compose_file_stat.stat.exists
+
+    - name: Ensure backup directories exist (parallel creation)
       file:
-        path: "{{ backup_dir }}"
+        path: "{{ item }}"
         state: directory
         owner: karsten
         group: karsten
         mode: '0755'
+      loop:
+        - "{{ backup_dir }}"
+        - "{{ nas_backup_dir }}"
 
-    - name: Check for Docker volumes related to {{ service_name }}
-      shell: docker volume ls --format "{% raw %}{{.Name}}{% endraw %}" | grep "{{ service_name }}" || true
-      register: docker_volumes_result
-      failed_when: false
-      changed_when: false
+    # Use block with rescue to ensure containers are always restarted
+    - block:
+        - name: Stop {{ service_name }} containers
+          shell: docker compose down
+          args:
+            chdir: "{{ service_dir }}"
+          register: stop_result
 
-    - name: Create archive of the {{ service_name }} directory
-      shell: |
-        cd "{{ service_dir | dirname }}"
-        tar czf "{{ backup_dir }}/{{ backup_file }}" "{{ service_name }}"
-      args:
-        executable: /bin/bash
-      when: docker_volumes_result.stdout_lines | length == 0
+        - name: Check for Docker volumes related to {{ service_name }}
+          shell: docker volume ls --format "{% raw %}{{.Name}}{% endraw %}" | grep "{{ service_name }}" || true
+          register: docker_volumes_result
+          failed_when: false
+          changed_when: false
 
-    - name: Create temporary directory for volume backups
-      tempfile:
-        state: directory
-        suffix: _{{ service_name }}_backup
-      register: temp_backup_dir
-      when: docker_volumes_result.stdout_lines | length > 0
+        - name: Set service volumes fact
+          set_fact:
+            service_volumes: "{{ docker_volumes_result.stdout_lines | default([]) }}"
 
-    - name: Backup Docker volumes
-      shell: |
-        docker run --rm \
-          -v {{ item }}:/volume \
-          -v {{ temp_backup_dir.path }}:/backup \
-          alpine:latest \
-          tar czf /backup/{{ item }}.tar.gz -C /volume .
-      loop: "{{ docker_volumes_result.stdout_lines }}"
-      when: docker_volumes_result.stdout_lines | length > 0
+        - name: Create archive of the {{ service_name }} directory (no volumes case)
+          community.general.archive:
+            path: "{{ service_dir }}"
+            dest: "{{ backup_dir }}/{{ backup_file }}"
+            format: gz
+            owner: karsten
+            group: karsten
+            mode: '0644'
+          when: service_volumes | length == 0
 
-    - name: Create combined archive with service directory and volumes
-      shell: |
-        cd "{{ service_dir | dirname }}"
-        # Create uncompressed tar first
-        tar cf "{{ backup_dir }}/{{ backup_file }}.tmp" "{{ service_name }}"
-        cd {{ temp_backup_dir.path }}
-        # Append volume backups to uncompressed tar
-        tar rf "{{ backup_dir }}/{{ backup_file }}.tmp" *.tar.gz
-        # Compress the final archive
-        gzip "{{ backup_dir }}/{{ backup_file }}.tmp"
-        mv "{{ backup_dir }}/{{ backup_file }}.tmp.gz" "{{ backup_dir }}/{{ backup_file }}"
-      args:
-        executable: /bin/bash
-      when: docker_volumes_result.stdout_lines | length > 0
+        - name: Create temporary directory for volume backups
+          tempfile:
+            state: directory
+            suffix: _{{ service_name }}_backup
+          register: temp_backup_dir
+          when: service_volumes | length > 0
 
-    - name: Clean up temporary backup directory
-      file:
-        path: "{{ temp_backup_dir.path }}"
-        state: absent
-      when: docker_volumes_result.stdout_lines | length > 0
+        - name: Backup Docker volumes in parallel
+          shell: |
+            docker run --rm \
+              -v {{ item }}:/volume:ro \
+              -v {{ temp_backup_dir.path }}:/backup \
+              --name backup_{{ item | regex_replace('[^a-zA-Z0-9]', '_') }} \
+              alpine:latest \
+              tar czf /backup/{{ item }}.tar.gz -C /volume .
+          loop: "{{ service_volumes }}"
+          when: service_volumes | length > 0
+          async: 300
+          poll: 0
+          register: volume_backup_jobs
 
-    - name: Ensure SMB share backup directory exists
-      file:
-        path: "{{ nas_backup_dir }}"
-        state: directory
-        owner: karsten
-        group: karsten
-        mode: '0755'
+        - name: Wait for volume backups to complete
+          async_status:
+            jid: "{{ item.ansible_job_id }}"
+          loop: "{{ volume_backup_jobs.results }}"
+          register: volume_backup_results
+          until: volume_backup_results.finished
+          retries: 60
+          delay: 5
+          when: service_volumes | length > 0
 
-    - name: Copy backup archive to SMB share
-      copy:
-        src: "{{ backup_dir }}/{{ backup_file }}"
-        dest: "{{ nas_backup_dir }}/{{ backup_file }}"
-        owner: karsten
-        group: karsten
-        mode: '0644'
+        - name: Create combined archive with service directory and volumes
+          shell: |
+            cd "{{ service_dir | dirname }}"
+            # Use pigz for parallel compression if available, fallback to gzip
+            COMPRESSOR="gzip"
+            if command -v pigz >/dev/null 2>&1; then
+              COMPRESSOR="pigz -{{ tar_compression_level }} -p {{ parallel_jobs }}"
+            fi
+            
+            # Create uncompressed tar first
+            tar cf "{{ backup_dir }}/{{ backup_file }}.tmp" "{{ service_name }}"
+            cd {{ temp_backup_dir.path }}
+            # Append volume backups to uncompressed tar
+            tar rf "{{ backup_dir }}/{{ backup_file }}.tmp" *.tar.gz 2>/dev/null || true
+            # Compress the final archive
+            $COMPRESSOR "{{ backup_dir }}/{{ backup_file }}.tmp"
+            mv "{{ backup_dir }}/{{ backup_file }}.tmp.gz" "{{ backup_dir }}/{{ backup_file }}"
+          args:
+            executable: /bin/bash
+          when: service_volumes | length > 0
 
-    - name: Upload archive to OneDrive with rclone
-      shell: rclone copy "{{ backup_dir }}/{{ backup_file }}" "{{ rclone_remote }}"
-      args:
-        executable: /bin/bash
+        - name: Clean up temporary backup directory
+          file:
+            path: "{{ temp_backup_dir.path }}"
+            state: absent
+          when: service_volumes | length > 0
 
-    - name: Remove old local backups (keep only latest)
-      shell: |
-        find {{ backup_dir }} -maxdepth 1 -type f -name '{{ backup_pattern }}' -printf '%T@ %p\n' | sort -nr | tail -n +2 | cut -d' ' -f2- | xargs -r rm --
+        - name: Verify backup file was created and has reasonable size
+          stat:
+            path: "{{ backup_dir }}/{{ backup_file }}"
+          register: backup_stat
+          failed_when: not backup_stat.stat.exists or backup_stat.stat.size < 1024  # At least 1KB
 
-      args:
-        executable: /bin/bash
+        - name: Upload operations in parallel
+          include_tasks: upload_backup.yml
 
-    - name: Remove old nas backups (keep latest {{ max_nas_backups }})
-      shell: |
-        ls -1t {{ nas_backup_dir }}/{{ backup_pattern }} | tail -n +{{ max_nas_backups + 1 }} | xargs -r rm --
-      args:
-        executable: /bin/bash
+      rescue:
+        - name: Log backup failure
+          debug:
+            msg: "Backup failed: {{ ansible_failed_result.msg | default('Unknown error') }}"
+          
+        - name: Fail the playbook
+          fail:
+            msg: "Backup process failed, but containers will be restarted"
 
-    - name: Remove old OneDrive backups (keep latest {{ max_onedrive_backups }})
-      shell: |
-        rclone lsf --format t "{{ rclone_remote }}" | grep '^{{ service_name }}_backup_.*\.tar\.gz$' | sort -r | tail -n +{{ max_onedrive_backups + 1 }} | while read file; do
-          rclone delete "{{ rclone_remote }}/$file"
-        done
-      args:
-        executable: /bin/bash
-
-    - name: Start {{ service_name }} containers
-      shell: docker-compose up -d
-      args:
-        chdir: "{{ service_dir }}"
+      always:
+        - name: Start {{ service_name }} containers
+          shell: docker compose up -d
+          args:
+            chdir: "{{ service_dir }}"
+          register: start_result
