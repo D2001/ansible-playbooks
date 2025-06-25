@@ -21,7 +21,7 @@
     service_dir: "{{ base_dir }}/{{ service_name }}"
     backup_dir: "{{ base_dir }}/backups/{{ service_name }}_backups"
     nas_backup_dir: "/mnt/backups/{{ service_name }}"
-    rclone_remote: "onedrive:{{ service_name }}_backups"
+    rclone_remote: "onedrive:backups/{{ service_name }}_backups"
     backup_pattern: "{{ service_name }}_backup_*.tar.gz"
     compose_file: "{{ service_dir }}/docker-compose.yml"
 
