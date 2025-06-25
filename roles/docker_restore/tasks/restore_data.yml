@@ -1,0 +1,112 @@
+---
+# Extract service files and restore Docker volumes
+# Requires: final_backup_file variable
+
+- name: Remove existing service directory (handle Docker-created files)
+  shell: |
+    set -e
+    if [ -d "{{ service_dir }}" ]; then
+      echo "Removing existing service directory..."
+      # Use sudo to handle files created by Docker with root ownership
+      sudo rm -rf "{{ service_dir }}"
+      echo "Service directory removed"
+    else
+      echo "Service directory doesn't exist, skipping removal"
+    fi
+  args:
+    executable: /bin/bash
+  failed_when: false
+
+- name: Create service directory
+  file:
+    path: "{{ service_dir }}"
+    state: directory
+    owner: karsten
+    group: karsten
+    mode: '0755'
+
+- name: Create temporary directory for extraction
+  tempfile:
+    state: directory
+    suffix: _{{ service_name }}_restore
+  register: temp_restore_dir
+
+- name: Extract backup archive
+  unarchive:
+    src: "{{ final_backup_file }}"
+    dest: "{{ temp_restore_dir.path }}"
+    remote_src: yes
+    owner: karsten
+    group: karsten
+    extra_opts:
+      - --overwrite
+      - --no-same-owner
+      - --no-same-permissions
+
+- name: Check for Docker volume backups
+  find:
+    paths: "{{ temp_restore_dir.path }}"
+    patterns: "*.tar.gz"
+    file_type: file
+  register: volume_backups_found
+
+- name: Restore Docker volumes
+  shell: |
+    set -e
+    VOLUME_NAME=$(basename "{{ item.path }}" .tar.gz)
+    echo "Restoring volume: $VOLUME_NAME"
+    
+    docker volume create "$VOLUME_NAME" || echo "Volume already exists"
+    
+    docker run --rm \
+      -v "$VOLUME_NAME":/volume \
+      -v "{{ temp_restore_dir.path }}":/backup \
+      alpine:latest \
+      sh -c "cd /volume && tar xzf /backup/$(basename '{{ item.path }}')"
+    
+    echo "Volume $VOLUME_NAME restored"
+  loop: "{{ volume_backups_found.files }}"
+  when: volume_backups_found.files | length > 0
+  args:
+    executable: /bin/bash
+  register: volume_restore_results
+
+- name: Remove volume files from temp directory
+  file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ volume_backups_found.files }}"
+  when: volume_backups_found.files | length > 0
+
+- name: Move service files to final location
+  shell: |
+    set -e
+    echo "Restoring service files..."
+    
+    if [ ! -d "{{ temp_restore_dir.path }}/{{ service_name }}" ]; then
+      echo "Error: Service directory not found in backup"
+      exit 1
+    fi
+    
+    # Copy all files (including hidden files)
+    cp -r "{{ temp_restore_dir.path }}/{{ service_name }}"/* "{{ service_dir }}/" 2>/dev/null || true
+    cp -r "{{ temp_restore_dir.path }}/{{ service_name }}"/.[!.]* "{{ service_dir }}/" 2>/dev/null || true
+    
+    # Set ownership and permissions recursively
+    sudo chown -R karsten:karsten "{{ service_dir }}"
+    sudo chmod -R u+rwX,g+rX,o+rX "{{ service_dir }}"
+    
+    echo "Service files restored with proper ownership"
+  args:
+    executable: /bin/bash
+
+- name: Verify docker-compose file exists
+  stat:
+    path: "{{ compose_file }}"
+  register: restored_compose
+  failed_when: not restored_compose.stat.exists
+
+- name: Clean up temporary directory
+  file:
+    path: "{{ temp_restore_dir.path }}"
+    state: absent

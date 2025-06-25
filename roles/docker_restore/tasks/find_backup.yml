@@ -1,0 +1,77 @@
+---
+# Find the latest backup from local, NAS, or OneDrive
+# Returns: restore_source, restore_file variables
+
+- name: Find latest local backup
+  shell: |
+    if [ -d "{{ backup_dir }}" ]; then
+      find "{{ backup_dir }}" -name "{{ backup_pattern }}" -type f -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n1 | cut -d' ' -f2- || echo ""
+    else
+      echo ""
+    fi
+  register: local_backup
+  changed_when: false
+
+- name: Check if NAS is mounted and find latest NAS backup
+  shell: |
+    if mountpoint -q "{{ nas_backup_dir | dirname }}" && [ -d "{{ nas_backup_dir }}" ]; then
+      find "{{ nas_backup_dir }}" -name "{{ backup_pattern }}" -type f -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n1 | cut -d' ' -f2- || echo ""
+    else
+      echo ""
+    fi
+  register: nas_backup
+  changed_when: false
+
+- name: Find latest OneDrive backup
+  shell: |
+    if command -v jq >/dev/null 2>&1; then
+      rclone lsjson "{{ rclone_remote }}" 2>/dev/null | jq -r '.[] | select(.Name | test("^{{ service_name }}_backup_.*\\.tar\\.gz$")) | "\(.ModTime) \(.Name)"' | sort -r | head -n1 | cut -d' ' -f2- || echo ""
+    else
+      rclone ls "{{ rclone_remote }}" 2>/dev/null | awk '{print $2}' | grep '^{{ service_name }}_backup_.*\.tar\.gz$' | sort | tail -n 1 || echo ""
+    fi
+  register: onedrive_backup
+  changed_when: false
+  failed_when: false
+
+- name: "Select best backup (priority: Local > NAS > OneDrive)"
+  set_fact:
+    restore_source: >-
+      {%- set local_file = local_backup.stdout | trim -%}
+      {%- set nas_file = nas_backup.stdout | trim -%}
+      {%- set onedrive_file = onedrive_backup.stdout | trim -%}
+      {%- if local_file != "" -%}
+        local
+      {%- elif nas_file != "" -%}
+        nas
+      {%- elif onedrive_file != "" -%}
+        onedrive
+      {%- else -%}
+        none
+      {%- endif -%}
+    restore_file: >-
+      {%- set local_file = local_backup.stdout | trim -%}
+      {%- set nas_file = nas_backup.stdout | trim -%}
+      {%- set onedrive_file = onedrive_backup.stdout | trim -%}
+      {%- if local_file != "" -%}
+        {{ local_file }}
+      {%- elif nas_file != "" -%}
+        {{ nas_file }}
+      {%- elif onedrive_file != "" -%}
+        {{ onedrive_file }}
+      {%- else -%}
+        ""
+      {%- endif -%}
+
+- name: Display backup selection
+  debug:
+    msg: |
+      Backup search results:
+      - Local: {{ local_backup.stdout | trim | default('Not found') }}
+      - NAS: {{ nas_backup.stdout | trim | default('Not found') }}
+      - OneDrive: {{ onedrive_backup.stdout | trim | default('Not found') }}
+      - Selected: {{ restore_source }} - {{ restore_file }}
+
+- name: Fail if no backup found
+  fail:
+    msg: "No backups found in any location!"
+  when: restore_source == "none"

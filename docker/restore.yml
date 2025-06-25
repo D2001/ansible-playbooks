@@ -15,8 +15,14 @@
         msg: "Restore cancelled."
       when: confirm_restore != "YES"
 
+    - name: Validate required service_name parameter
+      fail:
+        msg: "service_name must be specified with -e service_name=<service_name>"
+      when: service_name is not defined or service_name == "temp_service"
+
   vars:
     base_dir: "/home/karsten"
+    backup_base_dir: "{{ base_dir }}/backups"
     service_name: temp_service   # Override with -e "service_name=paperless"
     service_dir: "{{ base_dir }}/{{ service_name }}"
     backup_dir: "{{ base_dir }}/backups/{{ service_name }}_backups"
@@ -24,8 +30,23 @@
     rclone_remote: "onedrive:backups/{{ service_name }}_backups"
     backup_pattern: "{{ service_name }}_backup_*.tar.gz"
     compose_file: "{{ service_dir }}/docker-compose.yml"
+    # Restore timeout and retry settings
+    restore_timeout: 300
+    health_check_retries: 30
+    health_check_delay: 10
 
   tasks:
+    # Pre-flight checks and setup
+    - name: Ensure required commands are available
+      command: which {{ item }}
+      loop:
+        - docker
+        - tar
+        - rclone
+      register: command_check
+      failed_when: command_check.rc != 0
+      changed_when: false
+
     - name: Ensure backup directory exists
       file:
         path: "{{ backup_dir }}"
@@ -34,144 +55,162 @@
         group: karsten
         mode: '0755'
 
-    - name: Check if service directory exists
-      stat:
-        path: "{{ compose_file }}"
-      register: service_compose
+    # Use block with rescue for proper error handling and cleanup
+    - block:
+        - name: Check if service directory exists
+          stat:
+            path: "{{ compose_file }}"
+          register: service_compose
 
-    - name: Stop {{ service_name }} containers
-      shell: docker-compose down
-      args:
-        chdir: "{{ service_dir }}"
-      when: service_compose.stat.exists
+        - name: Stop {{ service_name }} containers gracefully
+          shell: |
+            if [ -f "{{ compose_file }}" ]; then
+              echo "Stopping {{ service_name }} containers..."
+              timeout {{ restore_timeout }} docker compose down --timeout 30 || {
+                echo "Graceful shutdown failed, forcing stop..."
+                docker compose kill || true
+                docker compose rm -f || true
+                # Clean up any remaining container files that might have root ownership
+                if [ -d "{{ service_dir }}" ]; then
+                  sudo find "{{ service_dir }}" -type f -exec sudo rm -f {} + 2>/dev/null || true
+                fi
+              }
+              echo "Containers stopped"
+            fi
+          args:
+            chdir: "{{ service_dir }}"
+          register: stop_result
+          failed_when: false
+          when: service_compose.stat.exists
 
-    # --- Find latest local backup ---
-    - name: Find latest local backup
-      shell: |
-        ls -1t {{ backup_dir }}/{{ backup_pattern }} 2>/dev/null | head -n 1
-      register: local_backup
-      changed_when: false
+        # Use role for restore process
+        - name: Restore Docker service
+          include_role:
+            name: docker_restore
 
-    # --- Find latest NAS backup ---
-    - name: Find latest NAS backup
-      shell: |
-        ls -1t {{ nas_backup_dir }}/{{ backup_pattern }} 2>/dev/null | head -n 1
-      register: nas_backup
-      changed_when: false
+        # --- Start services with health checks ---
+        - name: Start {{ service_name }} containers
+          shell: |
+            set -e
+            echo "Starting {{ service_name }} containers..."
+            docker compose up -d
+            echo "Containers started"
+          args:
+            chdir: "{{ service_dir }}"
+            executable: /bin/bash
+          register: start_result
 
-    # --- Find latest OneDrive backup ---
-    - name: Find latest OneDrive backup
-      shell: |
-        rclone ls "{{ rclone_remote }}" | awk '{print $2}' | grep '^{{ service_name }}_backup_.*\.tar\.gz$' | sort | tail -n 1
-      register: onedrive_backup
-      changed_when: false
+        - name: Wait for containers to be healthy (if health checks are defined)
+          shell: |
+            set -e
+            echo "Checking container health..."
+            
+            # Get list of containers for this service
+            CONTAINERS=$(docker compose ps -q 2>/dev/null || echo "")
+            
+            if [ -z "$CONTAINERS" ]; then
+              echo "Warning: No containers found for {{ service_name }}"
+              exit 0
+            fi
+            
+            # Check each container
+            for container in $CONTAINERS; do
+              CONTAINER_NAME=$(docker inspect --format '{% raw %}{{.Name}}{% endraw %}' "$container" | sed 's|^/||')
+              echo "Checking container: $CONTAINER_NAME"
+              
+              # Wait for container to be running
+              RETRIES=0
+              while [ $RETRIES -lt {{ health_check_retries }} ]; do
+                STATUS=$(docker inspect --format '{% raw %}{{.State.Status}}{% endraw %}' "$container" 2>/dev/null || echo "unknown")
+                
+                if [ "$STATUS" = "running" ]; then
+                  echo "Container $CONTAINER_NAME is running"
+                  break
+                elif [ "$STATUS" = "exited" ]; then
+                  echo "Error: Container $CONTAINER_NAME exited unexpectedly"
+                  docker logs "$container" --tail 20 || true
+                  exit 1
+                fi
+                
+                echo "Waiting for container $CONTAINER_NAME to start... (attempt $((RETRIES + 1))/{{ health_check_retries }})"
+                sleep {{ health_check_delay }}
+                RETRIES=$((RETRIES + 1))
+              done
+              
+              if [ $RETRIES -eq {{ health_check_retries }} ]; then
+                echo "Error: Container $CONTAINER_NAME failed to start within timeout"
+                exit 1
+              fi
+            done
+            
+            echo "All containers are running"
+          args:
+            chdir: "{{ service_dir }}"
+            executable: /bin/bash
+          register: health_check_result
 
-    # --- Set restore source and file (local > NAS > OneDrive)
-    - name: Set restore source and file (local > NAS > OneDrive)
-      set_fact:
-        restore_source: >-
-          {% if local_backup.stdout | trim != "" %}
-            local
-          {% elif nas_backup.stdout | trim != "" %}
-            nas
-          {% elif onedrive_backup.stdout | trim != "" %}
-            onedrive
-          {% else %}
-            none
-          {% endif %}
-        restore_file: >-
-          {% if local_backup.stdout | trim != "" %}
-            {{ local_backup.stdout | trim }}
-          {% elif nas_backup.stdout | trim != "" %}
-            {{ nas_backup.stdout | trim }}
-          {% elif onedrive_backup.stdout | trim != "" %}
-            {{ onedrive_backup.stdout | trim }}
-          {% else %}
-            ""
-          {% endif %}
+      rescue:
+        - name: Log restore failure details
+          debug:
+            msg: |
+              Restore failed with error: {{ ansible_failed_result.msg | default('Unknown error') }}
+              Task that failed: {{ ansible_failed_task.name | default('Unknown task') }}
 
-    - name: Fail if no backup found anywhere
-      fail:
-        msg: "No backups found in local, NAS, or OneDrive!"
-      when: restore_source == "none"
+        - name: Attempt to restore from emergency backup if available
+          shell: |
+            EMERGENCY_BACKUP=$(ls -1t "{{ backup_dir }}"/emergency_backup_{{ service_name }}_*.tar.gz 2>/dev/null | head -n1 || echo "")
+            if [ -n "$EMERGENCY_BACKUP" ] && [ -f "$EMERGENCY_BACKUP" ]; then
+              echo "Attempting to restore from emergency backup: $EMERGENCY_BACKUP"
+              # Use sudo to handle Docker-created files with root ownership
+              sudo rm -rf "{{ service_dir }}"
+              mkdir -p "{{ service_dir }}"
+              tar xzf "$EMERGENCY_BACKUP" -C "{{ base_dir }}"
+              sudo chown -R karsten:karsten "{{ service_dir }}"
+              echo "Emergency restore completed"
+            else
+              echo "No emergency backup available"
+            fi
+          args:
+            executable: /bin/bash
+          register: emergency_restore
+          failed_when: false
 
-    # --- If restoring from OneDrive, download it to backup_dir ---
-    - name: Download latest backup from OneDrive if needed
-      shell: |
-        rclone copy "{{ rclone_remote }}/{{ restore_file | basename | trim }}" "{{ backup_dir }}/"
-      when: restore_source == "onedrive"
-      args:
-        executable: /bin/bash
+        - name: Clean up on failure
+          file:
+            path: "{{ temp_restore_dir.path }}"
+            state: absent
+          when: temp_restore_dir is defined and temp_restore_dir.path is defined
 
-    # --- If restoring from NAS, copy it to backup_dir ---
-    - name: Copy latest backup from NAS if needed
-      shell: |
-        cp "{{ restore_file | trim }}" "{{ backup_dir }}/"
-      when: restore_source == "nas"
-      args:
-        executable: /bin/bash
+        - name: Fail with detailed error message
+          fail:
+            msg: |
+              Restore operation failed. Please check the following:
+              1. Backup file integrity: {{ final_backup_file | default('N/A') }}
+              2. Available disk space in {{ service_dir }}
+              3. Docker service status
+              4. Container logs for more details
+              
+              Emergency restore status: {{ emergency_restore.stdout | default('Not attempted') }}
 
-    # --- Remove existing jellyfin directory ---
-    - name: Remove existing {{ service_name }} directory
-      file:
-        path: "{{ service_dir }}"
-        state: absent
+      always:
+        - name: Clean up temporary directory
+          file:
+            path: "{{ temp_restore_dir.path }}"
+            state: absent
+          when: temp_restore_dir is defined and temp_restore_dir.path is defined
 
-    - name: Recreate {{ service_name }} directory
-      file:
-        path: "{{ service_dir }}"
-        state: directory
-        mode: '0755'
-
-    # --- Extract backup archive into ~/{{ service_name }} ---
-    - name: Create temporary directory for restore
-      tempfile:
-        state: directory
-        suffix: _{{ service_name }}_restore
-      register: temp_restore_dir
-
-    - name: Extract backup archive to temporary directory
-      unarchive:
-        src: "{{ backup_dir }}/{{ restore_file | basename | trim }}"
-        dest: "{{ temp_restore_dir.path }}"
-        remote_src: yes
-        extra_opts:
-          - --overwrite
-          - --no-same-owner
-          - --no-same-permissions
-
-    - name: Check for Docker volume backups in archive
-      shell: ls {{ temp_restore_dir.path }}/*.tar.gz 2>/dev/null || echo ""
-      register: volume_backups_found
-      changed_when: false
-
-    - name: Restore Docker volumes if found
-      shell: |
-        docker run --rm \
-          -v {{ item | basename | regex_replace('\.tar\.gz$', '') }}:/volume \
-          -v {{ temp_restore_dir.path }}:/backup \
-          alpine:latest \
-          sh -c "cd /volume && tar xzf /backup/{{ item | basename }}"
-      loop: "{{ volume_backups_found.stdout_lines }}"
-      when: volume_backups_found.stdout_lines | length > 0
-
-    - name: Remove volume backup files from temp directory
-      shell: rm -f {{ temp_restore_dir.path }}/*.tar.gz
-      when: volume_backups_found.stdout_lines | length > 0
-
-    - name: Move service directory files to final location
-      shell: |
-        cp -r "{{ temp_restore_dir.path }}/{{ service_name }}"/* "{{ service_dir }}/"
-        cp -r "{{ temp_restore_dir.path }}/{{ service_name }}"/.[!.]* "{{ service_dir }}/" 2>/dev/null || true
-      args:
-        executable: /bin/bash
-
-    - name: Clean up temporary restore directory
-      file:
-        path: "{{ temp_restore_dir.path }}"
-        state: absent
-
-    - name: Start {{ service_name }} containers
-      shell: docker-compose up -d
-      args:
-        chdir: "{{ service_dir }}"
+    - name: Display restore completion summary
+      debug:
+        msg: |
+          ✅ Restore completed successfully!
+          
+          Service: {{ service_name }}
+          Source: {{ restore_source }}
+          Backup file: {{ final_backup_file }}
+          Service directory: {{ service_dir }}
+          Volumes restored: {{ volume_restore_results.results | length | default(0) }}
+          
+          Next steps:
+          1. Verify service functionality
+          2. Check container logs if needed: docker compose logs -f
+          3. Remove emergency backup if restore is confirmed working

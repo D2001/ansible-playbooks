@@ -1,0 +1,37 @@
+---
+# Remove old backup files based on retention settings
+
+- name: Clean up old local backups
+  shell: |
+    cd "{{ backup_dir }}"
+    ls -1t {{ backup_pattern }} 2>/dev/null | tail -n +$(({{ max_local_backups }} + 1)) | xargs -r rm -f
+  register: local_cleanup
+  changed_when: local_cleanup.stdout != ""
+
+- name: Clean up old OneDrive backups
+  shell: |
+    rclone ls "{{ rclone_remote }}" | awk '{print $2}' | grep '^{{ service_name }}_backup_.*\.tar\.gz$' | sort -r | tail -n +$(({{ max_onedrive_backups }} + 1)) | while read file; do
+      echo "Deleting: $file"
+      rclone delete "{{ rclone_remote }}/$file"
+    done
+  register: onedrive_cleanup
+  changed_when: onedrive_cleanup.stdout != ""
+  failed_when: false
+
+- name: Clean up old NAS backups
+  shell: |
+    if [ -d "{{ nas_backup_dir }}" ]; then
+      cd "{{ nas_backup_dir }}"
+      ls -1t {{ backup_pattern }} 2>/dev/null | tail -n +$(({{ max_nas_backups }} + 1)) | xargs -r rm -f
+    fi
+  register: nas_cleanup
+  changed_when: nas_cleanup.stdout != ""
+  failed_when: false
+
+- name: Display cleanup results
+  debug:
+    msg: |
+      Cleanup completed:
+      - Local: {{ 'Files removed' if local_cleanup.changed else 'No cleanup needed' }}
+      - OneDrive: {{ 'Files removed' if onedrive_cleanup.changed else 'No cleanup needed' }}
+      - NAS: {{ 'Files removed' if nas_cleanup.changed else 'No cleanup needed' }}

@@ -1,0 +1,10 @@
+---
+# Default variables for Docker restore operations
+service_name: temp_service  # Override with -e "service_name=paperless"
+service_dir: "{{ base_dir }}/{{ service_name }}"
+compose_file: "{{ service_dir }}/docker-compose.yml"
+
+# Restore timeout and retry settings
+restore_timeout: 300
+health_check_retries: 30
+health_check_delay: 10
