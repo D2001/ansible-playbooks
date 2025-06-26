@@ -23,6 +23,17 @@
         filter: ansible_distribution*
       tags: packages
 
+    - name: Check OS compatibility
+      fail:
+        msg: "This playbook is designed for Ubuntu/Debian systems. Detected: {{ ansible_distribution }} {{ ansible_distribution_version }}"
+      when: ansible_distribution not in ['Ubuntu', 'Debian']
+      tags: packages
+
+    - name: Display OS information
+      debug:
+        msg: "Deploying on {{ ansible_distribution }} {{ ansible_distribution_version }} ({{ ansible_architecture }})"
+      tags: packages
+
     - name: Install base packages
       apt:
         name:
@@ -49,13 +60,6 @@
       failed_when: false
       tags: packages
 
-    - name: Install docker-compose from pip if plugin not available
-      pip:
-        name: docker-compose
-        state: present
-      when: docker_compose_plugin_result.failed
-      tags: packages
-
     - name: Ensure pip is installed for docker-compose fallback
       apt:
         name: 
@@ -63,6 +67,37 @@
           - python3-setuptools
         state: present
       when: docker_compose_plugin_result.failed
+      tags: packages
+
+    - name: Install docker-compose from pip if plugin not available
+      pip:
+        name: docker-compose
+        state: present
+      when: docker_compose_plugin_result.failed
+      tags: packages
+
+    - name: Verify Docker Compose installation
+      shell: |
+        if command -v docker >/dev/null 2>&1; then
+          if docker compose version >/dev/null 2>&1; then
+            echo "Docker Compose V2 (plugin): $(docker compose version)"
+          elif docker-compose --version >/dev/null 2>&1; then
+            echo "Docker Compose V1 (standalone): $(docker-compose --version)"
+          else
+            echo "Docker Compose not found"
+            exit 1
+          fi
+        else
+          echo "Docker not found"
+          exit 1
+        fi
+      register: docker_compose_version
+      changed_when: false
+      tags: packages
+
+    - name: Display Docker Compose version
+      debug:
+        msg: "{{ docker_compose_version.stdout }}"
       tags: packages
 
     - name: Ensure Docker service is running and enabled
@@ -277,38 +312,3 @@
         fstype: cifs
         opts: "{{ mount_opts }}"
         state: mounted
-
-    - name: Verify Docker Compose installation
-      shell: |
-        if command -v docker >/dev/null 2>&1; then
-          if docker compose version >/dev/null 2>&1; then
-            echo "Docker Compose V2 (plugin): $(docker compose version)"
-          elif docker-compose --version >/dev/null 2>&1; then
-            echo "Docker Compose V1 (standalone): $(docker-compose --version)"
-          else
-            echo "Docker Compose not found"
-            exit 1
-          fi
-        else
-          echo "Docker not found"
-          exit 1
-        fi
-      register: docker_compose_version
-      changed_when: false
-      tags: packages
-
-    - name: Display Docker Compose version
-      debug:
-        msg: "{{ docker_compose_version.stdout }}"
-      tags: packages
-
-    - name: Check OS compatibility
-      fail:
-        msg: "This playbook is designed for Ubuntu/Debian systems. Detected: {{ ansible_distribution }} {{ ansible_distribution_version }}"
-      when: ansible_distribution not in ['Ubuntu', 'Debian']
-      tags: packages
-
-    - name: Display OS information
-      debug:
-        msg: "Deploying on {{ ansible_distribution }} {{ ansible_distribution_version }} ({{ ansible_architecture }})"
-      tags: packages
