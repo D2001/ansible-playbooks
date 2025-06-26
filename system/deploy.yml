@@ -181,6 +181,7 @@
       when: rclone_check.rc != 0 or 'v1.6' not in rclone_check.stdout
       register: rclone_install
       changed_when: rclone_install.rc == 0
+      failed_when: rclone_install.rc != 0 and 'already installed' not in rclone_install.stdout
 
     - name: Show rclone version
       command: rclone version
