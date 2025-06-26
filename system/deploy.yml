@@ -60,20 +60,41 @@
       failed_when: false
       tags: packages
 
+    - name: Debug docker-compose-plugin result
+      debug:
+        msg: "docker-compose-plugin installation: {{ docker_compose_plugin_result.msg | default('Success') }}"
+      tags: packages
+
+    - name: Try alternative docker-compose via apt (Ubuntu/Debian)
+      apt:
+        name: docker-compose
+        state: present
+      register: docker_compose_apt_result
+      failed_when: false
+      when: "'No package matching' in docker_compose_plugin_result.msg"
+      tags: packages
+
     - name: Ensure pip is installed for docker-compose fallback
       apt:
         name: 
           - python3-pip
           - python3-setuptools
         state: present
-      when: "'No package matching' in docker_compose_plugin_result.msg or docker_compose_plugin_result.failed"
+      when: >
+        ('No package matching' in docker_compose_plugin_result.msg) and
+        (docker_compose_apt_result is skipped or 
+         ('No package matching' in (docker_compose_apt_result.msg | default(''))))
       tags: packages
 
-    - name: Install docker-compose from pip if plugin not available
+    - name: Install docker-compose from pip if other methods failed
       pip:
         name: docker-compose
         state: present
-      when: "'No package matching' in docker_compose_plugin_result.msg or docker_compose_plugin_result.failed"
+        break_system_packages: true
+      when: >
+        ('No package matching' in docker_compose_plugin_result.msg) and
+        (docker_compose_apt_result is skipped or 
+         ('No package matching' in (docker_compose_apt_result.msg | default(''))))
       tags: packages
 
     - name: Verify Docker Compose installation
