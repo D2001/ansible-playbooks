@@ -9,8 +9,8 @@ export PATH="/usr/local/bin:/usr/bin:/bin:/home/karsten/.local/bin"
 export ANSIBLE_CONFIG="/home/karsten/ansible-playbooks/ansible.cfg"
 
 # Ensure we're in the right directory
-cd "/home/karsten/ansible-playbooks/docker" || {
-    echo "ERROR: Cannot change to ansible-playbooks/docker directory" >&2
+cd "/home/karsten/ansible-playbooks" || {
+    echo "ERROR: Cannot change to ansible-playbooks directory" >&2
     exit 1
 }
 # ---------- USER SETTINGS ----------
@@ -29,10 +29,15 @@ done
 # -- sanity check -----------------------------------------------------------
 if [[ -z "$1" ]]; then
     # Default to backup.yml if no playbook specified (useful for cron)
-    PLAYBOOK="/home/karsten/ansible-playbooks/docker/backup.yml"
+    PLAYBOOK="./docker/backup.yml"
     echo "No playbook specified, defaulting to: $PLAYBOOK" >&2
 else
     PLAYBOOK="$1"; shift                     # $@ now holds extra ansible args
+    
+    # If the playbook path doesn't start with / or ./, assume it's in docker/ directory
+    if [[ ! "$PLAYBOOK" =~ ^[./] && ! "$PLAYBOOK" =~ ^/ ]]; then
+        PLAYBOOK="./docker/$PLAYBOOK"
+    fi
 fi
 
 # Check if playbook file exists
@@ -90,6 +95,10 @@ echo "Starting ansible-playbook: $PLAYBOOK" >&2
 echo "Arguments: $@" >&2
 echo "Log file: $LOGFILE" >&2
 
+# Log environment variables for debugging
+env > /home/karsten/backups/logs/cron_env.log
+
+# Run ansible-playbook with verbose debugging
 ansible-playbook -v "$PLAYBOOK" "$@" \
   | ts "$TIMESTAMP_FORMAT" \
   | tee -a "$LOGFILE"

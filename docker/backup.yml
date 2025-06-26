@@ -25,8 +25,3 @@
     - name: Backup Docker service
       include_role:
         name: docker_backup
-
-    - name: Clean up old backups
-      include_role:
-        name: backup_utils
-        tasks_from: cleanup_backups
