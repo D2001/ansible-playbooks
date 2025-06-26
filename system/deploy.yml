@@ -66,14 +66,14 @@
           - python3-pip
           - python3-setuptools
         state: present
-      when: docker_compose_plugin_result.failed
+      when: "'No package matching' in docker_compose_plugin_result.msg or docker_compose_plugin_result.failed"
       tags: packages
 
     - name: Install docker-compose from pip if plugin not available
       pip:
         name: docker-compose
         state: present
-      when: docker_compose_plugin_result.failed
+      when: "'No package matching' in docker_compose_plugin_result.msg or docker_compose_plugin_result.failed"
       tags: packages
 
     - name: Verify Docker Compose installation
