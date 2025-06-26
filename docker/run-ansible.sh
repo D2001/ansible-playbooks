@@ -95,9 +95,6 @@ echo "Starting ansible-playbook: $PLAYBOOK" >&2
 echo "Arguments: $@" >&2
 echo "Log file: $LOGFILE" >&2
 
-# Log environment variables for debugging
-env > /home/karsten/backups/logs/cron_env.log
-
 # Run ansible-playbook with verbose debugging
 ansible-playbook -v "$PLAYBOOK" "$@" \
   | ts "$TIMESTAMP_FORMAT" \
@@ -106,4 +103,12 @@ ansible-playbook -v "$PLAYBOOK" "$@" \
 # Capture the exit status
 EXIT_CODE=${PIPESTATUS[0]}
 echo "[INFO] Ansible playbook completed with exit code: $EXIT_CODE" | ts "$TIMESTAMP_FORMAT" | tee -a "$LOGFILE"
+
+# Clean up log file to keep only last 1000 lines
+if [[ -f "$LOGFILE" ]]; then
+    TEMP_LOGFILE="${LOGFILE}.tmp"
+    tail -n 1000 "$LOGFILE" > "$TEMP_LOGFILE" && mv "$TEMP_LOGFILE" "$LOGFILE"
+    echo "[INFO] Log file trimmed" | ts "$TIMESTAMP_FORMAT" >> "$LOGFILE"
+fi
+
 exit $EXIT_CODE
