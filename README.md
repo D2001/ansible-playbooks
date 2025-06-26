@@ -54,6 +54,9 @@ chmod +x docker/check-compatibility.sh
 
 ### 2. System Deployment (Optional)
 ```bash
+# Check system compatibility first
+./system/check-compatibility.sh
+
 # Deploy complete Raspberry Pi infrastructure
 sudo ansible-playbook system/deploy.yml
 ```
@@ -120,6 +123,23 @@ The system deployment module sets up a complete Raspberry Pi infrastructure with
   - `/mnt/backups` - Backup storage
   - `/mnt/public` - General file sharing
 
+### System Requirements
+
+#### Hardware
+- Raspberry Pi 4 (4GB+ recommended) **OR** Ubuntu/Debian x86_64 system
+- MicroSD card (32GB+ Class 10) for Raspberry Pi
+- Stable internet connection
+- Network access to NAS/file server (optional)
+
+#### Supported Operating Systems
+- **Ubuntu**: 18.04, 20.04, 22.04, 24.04 LTS
+- **Debian**: 10 (Buster), 11 (Bullseye), 12 (Bookworm)
+- **Raspberry Pi OS**: Based on Debian 11/12
+
+#### Architecture Support
+- **x86_64** (Intel/AMD 64-bit)
+- **aarch64** (ARM 64-bit)
+- **armv7l/armv6l** (ARM 32-bit)
 
 #### Prerequisites
 ```bash
@@ -128,6 +148,9 @@ sudo apt update && sudo apt upgrade -y
 
 # Install Ansible
 sudo apt install ansible -y
+
+# Check system compatibility
+./system/check-compatibility.sh
 
 # Ensure user has sudo privileges
 sudo usermod -aG sudo $USER
@@ -483,184 +506,47 @@ docker volume ls | grep service_name
 # Should be: service_name_volume_name
 ```
 
-### Security Considerations
+### Deployment Troubleshooting
 
-#### File Permissions
-- All backups created with `karsten:karsten` ownership
-- Backup directories have `755` permissions
-- SMB credentials secured with `600` permissions
+#### Common Issues
 
-#### Network Security
-- rclone uses OAuth2 for OneDrive authentication
-- SMB connections use credential files
-- WireGuard provides VPN tunnel for remote access
-
-#### Backup Encryption
-Consider encrypting sensitive backups:
+**1. Package Not Found Error**
 ```bash
-# Encrypt backup before upload
-gpg --symmetric --cipher-algo AES256 backup.tar.gz
-
-# Decrypt on restore
-gpg --decrypt backup.tar.gz.gpg > backup.tar.gz
+# Error: No package matching 'docker-compose-plugin' is available
+# Solution: The playbook automatically handles this by falling back to pip installation
 ```
 
-### Testing & Validation
-
-#### Backup Testing
+**2. Architecture Detection Issues**
 ```bash
-# Create test service
-mkdir -p /home/karsten/test_service
-echo "version: '3'" > /home/karsten/test_service/docker-compose.yml
-echo "TEST=value" > /home/karsten/test_service/.env
-
-# Run backup
-./docker/run-ansible.sh backup.yml -e "service_name=test_service"
-
-# Verify backup
-ls -la /home/karsten/backups/test_service_backups/
+# If you get "Unsupported architecture" error:
+uname -m  # Check your architecture
+# The playbook now supports x86_64, aarch64, armv7l, and armv6l
 ```
 
-#### Restore Testing
+**3. WireGuard Configuration Issues**
 ```bash
-# Remove test service
-rm -rf /home/karsten/test_service
-
-# Run restore
-./docker/run-ansible.sh restore.yml -e "service_name=test_service"
-
-# Verify restoration
-ls -la /home/karsten/test_service/
-cat /home/karsten/test_service/.env
+# Check if config file exists and has correct format
+sudo cat /etc/wireguard/wg0.conf
+sudo systemctl status wg-quick@wg0
 ```
 
-#### Integration Testing
+**4. SMB Mount Failures**
 ```bash
-# Check system compatibility
-./docker/check-compatibility.sh
+# Test SMB credentials manually
+sudo mount -t cifs //nas-labor.fritz.box/backups /mnt/test -o credentials=/etc/smb_credentials
 
-# Verify all components
-docker --version
-rclone version
-ansible --version
+# Check network connectivity to NAS
+ping nas-labor.fritz.box
 ```
 
-### Performance Optimization
-
-#### Backup Speed
-- **Fast compression**: Uses compression level 1 for speed
-- **Parallel operations**: Uploads to multiple destinations simultaneously
-- **Incremental approaches**: Only backs up when changes detected
-
-#### Storage Efficiency
-- **Smart retention**: Different policies for different storage tiers
-- **Compression**: All backups are gzipped
-- **Cleanup automation**: Automatic removal of old backups
-
-### Migration & Updates
-
-#### Updating the System
+**5. Docker Compose Version Issues**
 ```bash
-# Update system components
-sudo ansible-playbook system/deploy.yml
+# Check which version was installed
+docker compose version  # V2 plugin
+docker-compose --version  # V1 standalone
 
-# Update backup system
-git pull origin main
+# Both versions are supported by the backup system
 ```
 
-#### Migrating Services
-```bash
-# Backup on old system
-./docker/run-ansible.sh backup.yml -e "service_name=paperless"
-
-# Copy backup to new system or rely on OneDrive sync
-
-# Restore on new system
-./docker/run-ansible.sh restore.yml -e "service_name=paperless"
-```
-
----
-
-## 🔧 Maintenance & Operations
-
-### Regular Maintenance Tasks
-
-#### Weekly
-- Check backup logs for failures
-- Verify OneDrive sync status
-- Monitor disk space usage
-
-#### Monthly
-- Test restore process on non-critical service
-- Review and update retention policies
-- Check system updates
-
-#### Quarterly
-- Full disaster recovery test
-- Review and update documentation
-- Security audit of credentials
-
-### Monitoring Commands
-
-```bash
-# Check backup status
-find /home/karsten/backups -name "*.tar.gz" -mtime -7 | wc -l
-
-# Disk space monitoring
-df -h | grep -E "(backups|mnt)"
-
-# Service health
-docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
-
-# Log analysis
-grep -i error /home/karsten/backups/logs/*.log
-```
-
-### Troubleshooting Guide
-
-#### Common Error Patterns
-- `Permission denied`: Docker file ownership issues (handled automatically)
-- `Role not found`: Working directory or roles_path configuration
-- `Connection failed`: Network/mount issues
-- `Volume not found`: Docker volume naming convention
-
-#### Debug Mode
-```bash
-# Enable maximum verbosity
-./docker/run-ansible.sh backup.yml -e "service_name=test" -vvv
-
-# Check environment variables
-cat /home/karsten/backups/logs/cron_env.log
-
-# Validate configuration
-ansible-config dump
-```
-
----
-
-## 📚 Documentation
-
-- **System Deployment**: See `system/README.md` for detailed deployment instructions
-- **Docker Backup**: See `docker/README.md` for backup system specifics
-- **Role Documentation**: Each role contains its own `README.md` with detailed usage
-
----
-
-## 🤝 Contributing
-
-1. **Test Changes**: Always test with non-critical services first
-2. **Documentation**: Update relevant README files
-3. **Validation**: Run `ansible-playbook --syntax-check` before committing
-4. **Testing**: Use `--check` mode for dry runs
-
----
-
-## 📄 License
-
-This project is provided as-is for personal and commercial use. No warranty is provided for data loss or system issues.
-
----
-
-**Project Maintainer**: Karsten  
-**Last Updated**: June 2025  
-**Version**: 2.0.0 (Role-based Architecture)
+# ...existing code...
+````

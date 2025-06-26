@@ -18,11 +18,15 @@
 
   tasks:
 
-    - name: Install required packages
+    - name: Gather OS information
+      setup:
+        filter: ansible_distribution*
+      tags: packages
+
+    - name: Install base packages
       apt:
         name:
           - docker.io
-          - docker-compose-plugin  # Modern Docker Compose V2
           - rsync
           - unzip
           - git
@@ -30,9 +34,35 @@
           - iptables-persistent
           - moreutils
           - pigz
-          - cifs-utils 
+          - cifs-utils
+          - curl
+          - wget
         update_cache: true
         state: present
+      tags: packages
+
+    - name: Try to install docker-compose-plugin (Ubuntu 22.04+/Debian 11+)
+      apt:
+        name: docker-compose-plugin
+        state: present
+      register: docker_compose_plugin_result
+      failed_when: false
+      tags: packages
+
+    - name: Install docker-compose from pip if plugin not available
+      pip:
+        name: docker-compose
+        state: present
+      when: docker_compose_plugin_result.failed
+      tags: packages
+
+    - name: Ensure pip is installed for docker-compose fallback
+      apt:
+        name: 
+          - python3-pip
+          - python3-setuptools
+        state: present
+      when: docker_compose_plugin_result.failed
       tags: packages
 
     - name: Ensure Docker service is running and enabled
@@ -65,24 +95,36 @@
       tags: ansible_collections
 
     # ─── rclone Setup ───────────────────────────────
+    - name: Check if rclone is already installed
+      command: rclone version
+      register: rclone_check
+      failed_when: false
+      changed_when: false
+
     - name: Set rclone platform arch
       set_fact:
         rclone_arch: >-
           {{ (
             'linux-arm64' if ansible_architecture == 'aarch64' else
             'linux-arm'   if ansible_architecture in ['armv7l', 'armv6l'] else
+            'linux-amd64' if ansible_architecture in ['x86_64'] else
             'unsupported'
           ) | trim }}
+
+    - name: Display detected architecture
+      debug:
+        msg: "Detected architecture: {{ ansible_architecture }} -> rclone arch: {{ rclone_arch }}"
 
     - name: Fail if unsupported architecture
       fail:
         msg: "Unsupported architecture: {{ ansible_architecture }}"
       when: rclone_arch == 'unsupported'
 
-    - name: Install rclone (if not present)
+    - name: Install rclone (if not present or outdated)
       shell: curl -fsSL https://rclone.org/install.sh | bash
-      args:
-        creates: /usr/bin/rclone
+      when: rclone_check.rc != 0 or 'v1.6' not in rclone_check.stdout
+      register: rclone_install
+      changed_when: rclone_install.rc == 0
 
     - name: Show rclone version
       command: rclone version
@@ -235,3 +277,38 @@
         fstype: cifs
         opts: "{{ mount_opts }}"
         state: mounted
+
+    - name: Verify Docker Compose installation
+      shell: |
+        if command -v docker >/dev/null 2>&1; then
+          if docker compose version >/dev/null 2>&1; then
+            echo "Docker Compose V2 (plugin): $(docker compose version)"
+          elif docker-compose --version >/dev/null 2>&1; then
+            echo "Docker Compose V1 (standalone): $(docker-compose --version)"
+          else
+            echo "Docker Compose not found"
+            exit 1
+          fi
+        else
+          echo "Docker not found"
+          exit 1
+        fi
+      register: docker_compose_version
+      changed_when: false
+      tags: packages
+
+    - name: Display Docker Compose version
+      debug:
+        msg: "{{ docker_compose_version.stdout }}"
+      tags: packages
+
+    - name: Check OS compatibility
+      fail:
+        msg: "This playbook is designed for Ubuntu/Debian systems. Detected: {{ ansible_distribution }} {{ ansible_distribution_version }}"
+      when: ansible_distribution not in ['Ubuntu', 'Debian']
+      tags: packages
+
+    - name: Display OS information
+      debug:
+        msg: "Deploying on {{ ansible_distribution }} {{ ansible_distribution_version }} ({{ ansible_architecture }})"
+      tags: packages
