@@ -109,20 +109,62 @@
   failed_when: not restored_compose.stat.exists
 
 - name: Start restored containers
-  community.docker.docker_compose:
-    project_src: "{{ service_dir }}"
-    state: present
-  register: container_start_result
+  block:
+    - name: Start containers using Docker Compose V2 module
+      community.docker.docker_compose_v2:
+        project_src: "{{ service_dir }}"
+        state: present
+      register: container_start_result
+  rescue:
+    - name: Start containers using shell command (fallback)
+      shell: |
+        if command -v docker >/dev/null 2>&1; then
+          if docker compose version >/dev/null 2>&1; then
+            docker compose up -d
+          elif docker-compose --version >/dev/null 2>&1; then
+            docker-compose up -d
+          else
+            echo "No Docker Compose found"
+            exit 1
+          fi
+        else
+          echo "Docker not found"
+          exit 1
+        fi
+      args:
+        chdir: "{{ service_dir }}"
+      register: container_start_result
 
 - name: Wait for containers to be healthy
   pause:
     seconds: 10
 
 - name: Verify containers are running
-  community.docker.docker_compose:
-    project_src: "{{ service_dir }}"
-    state: present
-  register: container_status
+  block:
+    - name: Check container status using Docker Compose V2 module
+      community.docker.docker_compose_v2:
+        project_src: "{{ service_dir }}"
+        state: present
+      register: container_status
+  rescue:
+    - name: Check container status using shell command (fallback)
+      shell: |
+        if command -v docker >/dev/null 2>&1; then
+          if docker compose version >/dev/null 2>&1; then
+            docker compose ps
+          elif docker-compose --version >/dev/null 2>&1; then
+            docker-compose ps
+          else
+            echo "No Docker Compose found"
+            exit 1
+          fi
+        else
+          echo "Docker not found"
+          exit 1
+        fi
+      args:
+        chdir: "{{ service_dir }}"
+      register: container_status
 
 - name: Clean up temporary directory
   file:

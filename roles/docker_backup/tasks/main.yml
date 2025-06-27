@@ -28,10 +28,31 @@
 # Main backup process with error handling
 - block:
     - name: Stop {{ service_name }} containers
-      community.docker.docker_compose:
-        project_src: "{{ service_dir }}"
-        state: absent
-      register: stop_result
+      block:
+        - name: Stop containers using Docker Compose V2 module
+          community.docker.docker_compose_v2:
+            project_src: "{{ service_dir }}"
+            state: absent
+          register: stop_result
+      rescue:
+        - name: Stop containers using shell command (fallback)
+          shell: |
+            if command -v docker >/dev/null 2>&1; then
+              if docker compose version >/dev/null 2>&1; then
+                docker compose down
+              elif docker-compose --version >/dev/null 2>&1; then
+                docker-compose down
+              else
+                echo "No Docker Compose found"
+                exit 1
+              fi
+            else
+              echo "Docker not found"
+              exit 1
+            fi
+          args:
+            chdir: "{{ service_dir }}"
+          register: stop_result
 
     - name: Check for Docker volumes related to {{ service_name }}
       community.docker.docker_volume_info:
@@ -116,9 +137,30 @@
 
   always:
     - name: Start {{ service_name }} containers
-      community.docker.docker_compose:
-        project_src: "{{ service_dir }}"
-        state: present
-      register: start_result
+      block:
+        - name: Start containers using Docker Compose V2 module
+          community.docker.docker_compose_v2:
+            project_src: "{{ service_dir }}"
+            state: present
+          register: start_result
+      rescue:
+        - name: Start containers using shell command (fallback)
+          shell: |
+            if command -v docker >/dev/null 2>&1; then
+              if docker compose version >/dev/null 2>&1; then
+                docker compose up -d
+              elif docker-compose --version >/dev/null 2>&1; then
+                docker-compose up -d
+              else
+                echo "No Docker Compose found"
+                exit 1
+              fi
+            else
+              echo "Docker not found"
+              exit 1
+            fi
+          args:
+            chdir: "{{ service_dir }}"
+          register: start_result
 
 
