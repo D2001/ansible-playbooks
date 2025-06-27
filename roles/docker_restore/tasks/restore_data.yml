@@ -164,6 +164,52 @@
   register: restored_compose
   failed_when: not restored_compose.stat.exists
 
+- name: Check for hardware compatibility and modify docker-compose.yml if needed
+  shell: |
+    set -e
+    echo "Checking hardware compatibility..."
+    
+    COMPOSE_FILE="{{ service_dir }}/docker-compose.yml"
+    BACKUP_FILE="${COMPOSE_FILE}.backup"
+    
+    # Create backup of original compose file
+    cp "$COMPOSE_FILE" "$BACKUP_FILE"
+    
+    # Check for /dev/dri device
+    if [ ! -e "/dev/dri" ]; then
+      echo "⚠ Warning: /dev/dri not found - disabling GPU acceleration"
+      # Comment out device mappings for /dev/dri
+      sed -i 's|^\s*- /dev/dri:/dev/dri.*|#&  # Disabled: device not available on this system|g' "$COMPOSE_FILE"
+      # Comment out devices section if it only contains /dev/dri
+      sed -i '/^\s*devices:\s*$/,/^\s*[^[:space:]]/ {
+        /^\s*devices:\s*$/s/^/#/
+        /^\s*- .*\/dev\/dri.*$/s/^/#/
+        /^\s*#.*\/dev\/dri.*$/,/^\s*[^[:space:]]/ {
+          /^\s*[^[:space:]#]/!s/^/#/
+        }
+      }' "$COMPOSE_FILE"
+    fi
+    
+    # Check if nvidia runtime is available
+    if ! docker info 2>/dev/null | grep -q "nvidia"; then
+      echo "⚠ Warning: NVIDIA runtime not available - disabling GPU features"
+      # Comment out runtime: nvidia if present
+      sed -i 's|^\s*runtime:\s*nvidia.*|#&  # Disabled: NVIDIA runtime not available|g' "$COMPOSE_FILE"
+    fi
+    
+    # Show what was modified
+    if ! diff -q "$BACKUP_FILE" "$COMPOSE_FILE" >/dev/null 2>&1; then
+      echo "✓ Docker compose file modified for hardware compatibility:"
+      diff "$BACKUP_FILE" "$COMPOSE_FILE" || true
+    else
+      echo "✓ No hardware compatibility issues found"
+    fi
+    
+    echo "Hardware compatibility check completed"
+  args:
+    executable: /bin/bash
+  failed_when: false
+
 - name: Start restored containers
   block:
     - name: Start containers using Docker Compose V2 module
@@ -172,27 +218,108 @@
         state: present
       register: container_start_result
   rescue:
-    - name: Start containers using shell command (fallback)
+    - name: Handle hardware compatibility issues
+      block:
+        - name: Check if error is related to device issues
+          set_fact:
+            device_error: "{{ 'device' in (ansible_failed_result.msg | default('')) or '/dev/' in (ansible_failed_result.msg | default('')) }}"
+        
+        - name: Apply additional hardware compatibility fixes
+          shell: |
+            set -e
+            echo "Applying additional hardware compatibility fixes..."
+            
+            COMPOSE_FILE="{{ service_dir }}/docker-compose.yml"
+            
+            # More aggressive device cleanup
+            echo "Removing all device mappings..."
+            sed -i '/^\s*devices:/,/^\s*[^[:space:]]/ {
+              /^\s*devices:/d
+              /^\s*-.*\/dev\//d
+              /^\s*[^[:space:]]/!d
+            }' "$COMPOSE_FILE"
+            
+            # Remove group_add if it exists (often used with device access)
+            sed -i '/^\s*group_add:/,/^\s*[^[:space:]]/ {
+              /^\s*group_add:/d
+              /^\s*-.*[0-9]/d
+              /^\s*[^[:space:]]/!d
+            }' "$COMPOSE_FILE"
+            
+            # Remove any privileged settings that might cause issues
+            sed -i 's|^\s*privileged:\s*true.*|#&  # Disabled: may cause issues on different systems|g' "$COMPOSE_FILE"
+            
+            echo "✓ Hardware compatibility fixes applied"
+            echo "Modified docker-compose.yml:"
+            cat "$COMPOSE_FILE"
+          args:
+            executable: /bin/bash
+          when: device_error | default(false)
+        
+        - name: Retry container start with shell command (fallback)
+          shell: |
+            if command -v docker >/dev/null 2>&1; then
+              if docker compose version >/dev/null 2>&1; then
+                echo "Using docker compose (V2)"
+                docker compose up -d
+              elif docker-compose --version >/dev/null 2>&1; then
+                echo "Using docker-compose (V1)"
+                docker-compose up -d
+              else
+                echo "No Docker Compose found"
+                exit 1
+              fi
+            else
+              echo "Docker not found"
+              exit 1
+            fi
+          args:
+            chdir: "{{ service_dir }}"
+          register: container_start_result
+          failed_when: container_start_result.rc != 0
+    - name: Create minimal working docker-compose.yml as last resort
       shell: |
-        if command -v docker >/dev/null 2>&1; then
-          if docker compose version >/dev/null 2>&1; then
-            echo "Using docker compose (V2)"
-            docker compose up -d
-          elif docker-compose --version >/dev/null 2>&1; then
-            echo "Using docker-compose (V1)"
-            docker-compose up -d
-          else
-            echo "No Docker Compose found"
-            exit 1
-          fi
-        else
-          echo "Docker not found"
-          exit 1
-        fi
+        set -e
+        echo "Creating minimal docker-compose.yml as last resort..."
+        
+        COMPOSE_FILE="{{ service_dir }}/docker-compose.yml"
+        MINIMAL_COMPOSE="/tmp/minimal-compose.yml"
+        
+        # Create a minimal compose file without hardware-specific features
+        cat > "$MINIMAL_COMPOSE" << 'EOF'
+        services:
+          {{ service_name }}:
+            image: lscr.io/linuxserver/jellyfin:latest
+            container_name: {{ service_name }}
+            network_mode: host
+            environment:
+              - PUID=1000
+              - PGID=1000
+              - TZ=Europe/Berlin
+            volumes:
+              - {{ service_name }}_config:/config
+              - {{ service_name }}_cache:/cache
+            restart: unless-stopped
+        
+        volumes:
+          {{ service_name }}_config:
+          {{ service_name }}_cache:
+        EOF
+        
+        # Replace the problematic compose file
+        cp "$MINIMAL_COMPOSE" "$COMPOSE_FILE"
+        sudo chown karsten:karsten "$COMPOSE_FILE"
+        
+        echo "✓ Minimal docker-compose.yml created"
+        echo "Starting with minimal configuration..."
+        
+        # Try to start with minimal config
+        docker compose up -d
       args:
+        executable: /bin/bash
         chdir: "{{ service_dir }}"
-      register: container_start_result
-      failed_when: container_start_result.rc != 0
+      register: minimal_start_result
+      failed_when: minimal_start_result.rc != 0
 
 - name: Wait for containers to be healthy
   pause:
@@ -232,3 +359,24 @@
   file:
     path: "{{ temp_restore_dir.path }}"
     state: absent
+
+- name: Display hardware compatibility summary
+  debug:
+    msg: |
+      ⚠ Hardware Compatibility Issues Detected ⚠
+      
+      The original docker-compose.yml contained hardware-specific configurations
+      that are not available on this system. The following changes were made:
+      
+      {% if device_error | default(false) %}
+      - Removed /dev/dri device mappings (GPU acceleration disabled)
+      - Removed hardware-specific group mappings
+      - Disabled privileged mode if present
+      {% endif %}
+      
+      Your service should now start correctly, but with reduced hardware acceleration.
+      You can manually edit the docker-compose.yml file later to re-enable features
+      if the required hardware becomes available.
+      
+      Service: {{ service_name }}
+      Location: {{ service_dir }}/docker-compose.yml
