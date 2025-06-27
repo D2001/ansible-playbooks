@@ -1,0 +1,13 @@
+---
+# Default variables for Docker backup operations
+service_name: temp_service  # Override with -e "service_name=paperless"
+service_dir: "{{ base_dir }}/{{ service_name }}"
+compose_file: "{{ service_dir }}/docker-compose.yml"
+
+# Backup settings
+timestamp: "{{ ansible_date_time.iso8601_basic_short }}"
+backup_file: "{{ service_name }}_backup_{{ timestamp }}.tar.gz"
+
+# Health check settings
+health_check_retries: 30
+health_check_delay: 10

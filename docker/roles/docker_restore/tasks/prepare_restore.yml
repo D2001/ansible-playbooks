@@ -1,0 +1,71 @@
+---
+# Download/copy backup and create emergency backup
+# Requires: restore_source, restore_file variables
+# Returns: final_backup_file variable
+
+- name: Download backup from OneDrive if needed
+  shell: |
+    set -e
+    echo "Downloading {{ restore_file | basename }} from OneDrive..."
+    rclone copy "{{ rclone_remote }}/{{ restore_file | basename }}" "{{ backup_dir }}/" --progress
+    if [ ! -f "{{ backup_dir }}/{{ restore_file | basename }}" ]; then
+      echo "Error: Downloaded file not found"
+      exit 1
+    fi
+    echo "Download completed"
+  when: restore_source == "onedrive"
+  args:
+    executable: /bin/bash
+  timeout: "{{ restore_timeout }}"
+
+- name: Copy backup from NAS if needed
+  shell: |
+    set -e
+    echo "Copying {{ restore_file }} from NAS..."
+    cp "{{ restore_file }}" "{{ backup_dir }}/"
+    if [ ! -f "{{ backup_dir }}/{{ restore_file | basename }}" ]; then
+      echo "Error: Copied file not found"
+      exit 1
+    fi
+    echo "Copy completed"
+  when: restore_source == "nas"
+  args:
+    executable: /bin/bash
+
+- name: Set final backup file path
+  set_fact:
+    final_backup_file: >-
+      {%- if restore_source | trim == "local" -%}
+        {{ restore_file | trim }}
+      {%- else -%}
+        {{ backup_dir }}/{{ restore_file | trim | basename }}
+      {%- endif -%}
+
+- name: Verify backup file integrity
+  stat:
+    path: "{{ final_backup_file }}"
+  register: backup_file_stat
+  failed_when: not backup_file_stat.stat.exists or backup_file_stat.stat.size < 1024
+
+- name: Test backup archive
+  shell: |
+    set -e
+    echo "Testing backup file integrity..."
+    if ! tar -tzf "{{ final_backup_file }}" >/dev/null 2>&1; then
+      echo "Error: Backup file is corrupted"
+      exit 1
+    fi
+    echo "Backup file is valid"
+  args:
+    executable: /bin/bash
+
+- name: Create emergency backup of existing service
+  shell: |
+    if [ -d "{{ service_dir }}" ]; then
+      echo "Creating emergency backup..."
+      tar czf "{{ backup_dir }}/emergency_backup_{{ service_name }}_$(date +%Y%m%d_%H%M%S).tar.gz" \
+        -C "{{ base_dir }}" "{{ service_name }}" || echo "Warning: Emergency backup failed"
+    fi
+  args:
+    executable: /bin/bash
+  failed_when: false
