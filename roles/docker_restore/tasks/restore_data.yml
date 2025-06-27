@@ -50,25 +50,27 @@
     file_type: file
   register: volume_backups_found
 
-- name: Restore Docker volumes
-  shell: |
-    set -e
-    VOLUME_NAME=$(basename "{{ item.path }}" .tar.gz)
-    echo "Restoring volume: $VOLUME_NAME"
-    
-    docker volume create "$VOLUME_NAME" || echo "Volume already exists"
-    
-    docker run --rm \
-      -v "$VOLUME_NAME":/volume \
-      -v "{{ temp_restore_dir.path }}":/backup \
-      alpine:latest \
-      sh -c "cd /volume && tar xzf /backup/$(basename '{{ item.path }}')"
-    
-    echo "Volume $VOLUME_NAME restored"
+- name: Create Docker volumes for restore
+  community.docker.docker_volume:
+    name: "{{ item.path | basename | regex_replace('\\.tar\\.gz$', '') }}"
+    state: present
   loop: "{{ volume_backups_found.files }}"
   when: volume_backups_found.files | length > 0
-  args:
-    executable: /bin/bash
+
+- name: Restore Docker volumes using Ansible Docker module
+  community.docker.docker_container:
+    name: "restore_{{ service_name }}_{{ item.path | basename | regex_replace('\\.tar\\.gz$', '') }}"
+    image: alpine:latest
+    state: started
+    detach: false
+    cleanup: true
+    auto_remove: true
+    volumes:
+      - "{{ item.path | basename | regex_replace('\\.tar\\.gz$', '') }}:/volume"
+      - "{{ temp_restore_dir.path }}:/backup:ro"
+    command: sh -c "cd /volume && tar xzf /backup/{{ item.path | basename }}"
+  loop: "{{ volume_backups_found.files }}"
+  when: volume_backups_found.files | length > 0
   register: volume_restore_results
 
 - name: Remove volume files from temp directory
@@ -105,6 +107,22 @@
     path: "{{ compose_file }}"
   register: restored_compose
   failed_when: not restored_compose.stat.exists
+
+- name: Start restored containers
+  community.docker.docker_compose:
+    project_src: "{{ service_dir }}"
+    state: present
+  register: container_start_result
+
+- name: Wait for containers to be healthy
+  pause:
+    seconds: 10
+
+- name: Verify containers are running
+  community.docker.docker_compose:
+    project_src: "{{ service_dir }}"
+    state: present
+  register: container_status
 
 - name: Clean up temporary directory
   file:

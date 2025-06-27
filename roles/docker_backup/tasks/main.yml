@@ -28,20 +28,19 @@
 # Main backup process with error handling
 - block:
     - name: Stop {{ service_name }} containers
-      shell: docker compose down
-      args:
-        chdir: "{{ service_dir }}"
+      community.docker.docker_compose:
+        project_src: "{{ service_dir }}"
+        state: absent
       register: stop_result
 
     - name: Check for Docker volumes related to {{ service_name }}
-      shell: docker volume ls --format "{% raw %}{{.Name}}{% endraw %}" | grep "{{ service_name }}" || true
-      register: docker_volumes_result
+      community.docker.docker_volume_info:
+      register: all_volumes_result
       failed_when: false
-      changed_when: false
 
-    - name: Set service volumes fact
+    - name: Filter volumes for this service
       set_fact:
-        service_volumes: "{{ docker_volumes_result.stdout_lines | default([]) }}"
+        service_volumes: "{{ all_volumes_result.volumes | selectattr('Name', 'match', service_name + '_.*') | map(attribute='Name') | list if all_volumes_result.volumes is defined else [] }}"
 
     - name: Create archive (no volumes case)
       community.general.archive:
@@ -60,13 +59,18 @@
       register: temp_backup_dir
       when: service_volumes | length > 0
 
-    - name: Backup Docker volumes
-      shell: |
-        docker run --rm \
-          -v {{ item }}:/volume:ro \
-          -v {{ temp_backup_dir.path }}:/backup \
-          alpine:latest \
-          tar czf /backup/{{ item }}.tar.gz -C /volume .
+    - name: Backup Docker volumes using Ansible Docker module
+      community.docker.docker_container:
+        name: "backup_{{ service_name }}_{{ item }}"
+        image: alpine:latest
+        state: started
+        detach: false
+        cleanup: true
+        auto_remove: true
+        volumes:
+          - "{{ item }}:/volume:ro"
+          - "{{ temp_backup_dir.path }}:/backup"
+        command: tar czf /backup/{{ item }}.tar.gz -C /volume .
       loop: "{{ service_volumes }}"
       when: service_volumes | length > 0
 
@@ -112,9 +116,9 @@
 
   always:
     - name: Start {{ service_name }} containers
-      shell: docker compose up -d
-      args:
-        chdir: "{{ service_dir }}"
+      community.docker.docker_compose:
+        project_src: "{{ service_dir }}"
+        state: present
       register: start_result
 
 
