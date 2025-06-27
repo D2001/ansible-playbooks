@@ -548,5 +548,172 @@ docker-compose --version  # V1 standalone
 # Both versions are supported by the backup system
 ```
 
-# ...existing code...
-````
+## Docker Service Configuration
+
+### Hardware Acceleration Support
+
+The Docker services (particularly Jellyfin) support flexible hardware acceleration using Docker Compose profiles. This allows you to run services with or without GPU support based on your hardware capabilities.
+
+#### Jellyfin Hardware Acceleration
+
+The Jellyfin service includes a GPU profile for hardware transcoding:
+
+```bash
+# Standard deployment (no GPU)
+cd /home/karsten/jellyfin
+docker compose up -d
+
+# With GPU hardware acceleration
+cd /home/karsten/jellyfin
+docker compose --profile gpu up -d
+```
+
+#### Using the Jellyfin Management Script
+
+A convenience script is provided for easier management:
+
+```bash
+cd /home/karsten/jellyfin
+
+# Start without GPU
+./jellyfin.sh start
+
+# Start with GPU support
+./jellyfin.sh start --gpu
+
+# Other commands
+./jellyfin.sh stop
+./jellyfin.sh restart --gpu
+./jellyfin.sh logs
+./jellyfin.sh update --gpu
+./jellyfin.sh status
+```
+
+#### GPU Prerequisites
+
+Before using GPU acceleration, ensure:
+
+1. **GPU drivers are installed**:
+   ```bash
+   # For Intel integrated graphics
+   sudo apt install intel-media-va-driver
+   
+   # For AMD graphics
+   sudo apt install mesa-va-drivers
+   
+   # For NVIDIA (requires NVIDIA Container Toolkit)
+   # See: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html
+   ```
+
+2. **User is in video group**:
+   ```bash
+   sudo usermod -a -G video $USER
+   # Log out and back in for changes to take effect
+   ```
+
+3. **GPU devices are accessible**:
+   ```bash
+   ls -la /dev/dri/
+   # Should show render and card devices
+   ```
+
+#### Testing GPU Access
+
+```bash
+# Test GPU device access
+docker run --rm --device /dev/dri:/dev/dri ubuntu:latest ls -la /dev/dri/
+
+# Test with video group
+VIDEO_GID=$(getent group video | cut -d: -f3)
+docker run --rm --device /dev/dri:/dev/dri --group-add $VIDEO_GID ubuntu:latest id
+```
+
+### Backup Integration with Profiles
+
+The Ansible backup system automatically handles Docker Compose profiles:
+
+```bash
+# Backup services (detects and preserves profile usage)
+cd /home/karsten/ansible-playbooks/docker
+./run-ansible.sh backup.yml
+
+# Restore services (maintains original profile configuration)
+cd /home/karsten/ansible-playbooks/docker
+./run-ansible.sh restore.yml
+```
+
+The backup system preserves the Docker Compose configuration and will restore services with the same profile settings they had when backed up.
+
+### Adding New Services
+
+When adding new Docker services:
+
+1. **Create service directory** under `/home/karsten/`
+2. **Add to backup configuration** in `roles/docker_backup/vars/main.yml`
+3. **Use profiles** for optional features (GPU, development, etc.)
+4. **Follow naming conventions** for consistency
+
+Example service structure:
+```
+/home/karsten/new-service/
+├── docker-compose.yml          # Main service definition
+├── README.md                   # Service documentation
+├── .env.example               # Environment variables example
+└── manage.sh                  # Optional management script
+```
+
+### Troubleshooting Docker Services
+
+#### GPU Profile Issues
+
+1. **"no such device" errors**:
+   ```bash
+   # Check if GPU devices exist
+   ls -la /dev/dri/
+   
+   # If missing, install GPU drivers
+   sudo apt update && sudo apt install intel-media-va-driver
+   ```
+
+2. **Permission denied accessing GPU**:
+   ```bash
+   # Check video group membership
+   groups $USER | grep video
+   
+   # Add user to video group if missing
+   sudo usermod -a -G video $USER
+   ```
+
+3. **Profile not found**:
+   ```bash
+   # List available profiles
+   docker compose config --profiles
+   
+   # Check compose file syntax
+   docker compose config
+   ```
+
+#### Service Communication Issues
+
+1. **Services can't communicate**:
+   - Check if services are on the same Docker network
+   - Verify service names in docker-compose.yml
+   - Test connectivity: `docker exec -it service1 ping service2`
+
+2. **Port conflicts**:
+   ```bash
+   # Check what's using a port
+   sudo netstat -tulpn | grep :8096
+   
+   # Kill conflicting processes if needed
+   sudo kill -9 <PID>
+   ```
+
+3. **Volume mount issues**:
+   ```bash
+   # Check volume permissions
+   ls -la /path/to/volume
+   
+   # Fix ownership if needed
+   sudo chown -R 1000:1000 /path/to/volume
+   ```
