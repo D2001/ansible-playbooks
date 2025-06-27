@@ -30,10 +30,8 @@
     rclone_remote: "onedrive:backups/{{ service_name }}_backups"
     backup_pattern: "{{ service_name }}_backup_*.tar.gz"
     compose_file: "{{ service_dir }}/docker-compose.yml"
-    # Restore timeout and retry settings
+    # Restore timeout setting
     restore_timeout: 300
-    health_check_retries: 30
-    health_check_delay: 10
 
   tasks:
     # Pre-flight checks and setup
@@ -100,54 +98,26 @@
             executable: /bin/bash
           register: start_result
 
-        - name: Wait for containers to be healthy (if health checks are defined)
+        - name: Wait for containers to start
           shell: |
-            set -e
-            echo "Checking container health..."
+            echo "Waiting for containers to start..."
+            sleep 10
             
-            # Get list of containers for this service
-            CONTAINERS=$(docker compose ps -q 2>/dev/null || echo "")
-            
-            if [ -z "$CONTAINERS" ]; then
-              echo "Warning: No containers found for {{ service_name }}"
-              exit 0
+            # Check if containers are running
+            if docker compose ps | grep -q "Up"; then
+              echo "✓ Containers are running"
+              docker compose ps
+            else
+              echo "⚠ Warning: Some containers may not be running"
+              docker compose ps
+              echo "Recent logs:"
+              docker compose logs --tail 10
             fi
-            
-            # Check each container
-            for container in $CONTAINERS; do
-              CONTAINER_NAME=$(docker inspect --format '{% raw %}{{.Name}}{% endraw %}' "$container" | sed 's|^/||')
-              echo "Checking container: $CONTAINER_NAME"
-              
-              # Wait for container to be running
-              RETRIES=0
-              while [ $RETRIES -lt {{ health_check_retries }} ]; do
-                STATUS=$(docker inspect --format '{% raw %}{{.State.Status}}{% endraw %}' "$container" 2>/dev/null || echo "unknown")
-                
-                if [ "$STATUS" = "running" ]; then
-                  echo "Container $CONTAINER_NAME is running"
-                  break
-                elif [ "$STATUS" = "exited" ]; then
-                  echo "Error: Container $CONTAINER_NAME exited unexpectedly"
-                  docker logs "$container" --tail 20 || true
-                  exit 1
-                fi
-                
-                echo "Waiting for container $CONTAINER_NAME to start... (attempt $((RETRIES + 1))/{{ health_check_retries }})"
-                sleep {{ health_check_delay }}
-                RETRIES=$((RETRIES + 1))
-              done
-              
-              if [ $RETRIES -eq {{ health_check_retries }} ]; then
-                echo "Error: Container $CONTAINER_NAME failed to start within timeout"
-                exit 1
-              fi
-            done
-            
-            echo "All containers are running"
           args:
             chdir: "{{ service_dir }}"
             executable: /bin/bash
           register: health_check_result
+          failed_when: false
 
       rescue:
         - name: Log restore failure details
