@@ -97,7 +97,13 @@
          ('No package matching' in (docker_compose_apt_result.msg | default(''))))
       tags: packages
 
-    - name: Install Docker Compose V2 plugin manually if package not available
+    - name: Check if Docker Compose V2 plugin is available
+      shell: docker compose version
+      register: compose_v2_check
+      failed_when: false
+      changed_when: false
+
+    - name: Install Docker Compose V2 plugin manually if not available
       block:
         - name: Create Docker CLI plugins directory
           file:
@@ -125,13 +131,6 @@
             group: root
           timeout: 300
 
-        - name: Create symlink to make plugin available system-wide
-          file:
-            src: /usr/local/lib/docker/cli-plugins/docker-compose
-            dest: /usr/bin/docker-compose
-            state: link
-            force: yes
-
         - name: Test Docker Compose V2 plugin installation
           shell: docker compose version
           register: compose_v2_test
@@ -141,10 +140,7 @@
           debug:
             msg: "Docker Compose V2 installed: {{ compose_v2_test.stdout }}"
 
-      when: >
-        ('No package matching' in docker_compose_plugin_result.msg) and
-        (docker_compose_apt_result is skipped or 
-         ('No package matching' in (docker_compose_apt_result.msg | default(''))))
+      when: compose_v2_check.rc != 0
       tags: packages
 
     - name: Verify Docker Compose installation
