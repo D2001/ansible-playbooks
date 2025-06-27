@@ -55,13 +55,13 @@
           register: stop_result
 
     - name: Check for Docker volumes related to {{ service_name }}
-      community.docker.docker_volume_info:
-      register: all_volumes_result
+      shell: docker volume ls --format "{{ '{{' }}.Name{{ '}}' }}" | grep "^{{ service_name }}_"
+      register: volumes_result
       failed_when: false
 
     - name: Filter volumes for this service
       set_fact:
-        service_volumes: "{{ all_volumes_result.volumes | selectattr('Name', 'match', service_name + '_.*') | map(attribute='Name') | list if all_volumes_result.volumes is defined else [] }}"
+        service_volumes: "{{ volumes_result.stdout_lines if volumes_result.rc == 0 else [] }}"
 
     - name: Create archive (no volumes case)
       community.general.archive:
@@ -100,11 +100,15 @@
         cd "{{ service_dir | dirname }}"
         tar czf "{{ backup_dir }}/{{ backup_file }}" "{{ service_name }}"
         cd {{ temp_backup_dir.path }}
-        tar czf "{{ backup_dir }}/{{ backup_file }}.tmp" *.tar.gz 2>/dev/null || true
-        if [ -f "{{ backup_dir }}/{{ backup_file }}.tmp" ]; then
-          cd "{{ backup_dir }}"
-          tar --concatenate --file="{{ backup_file }}" "{{ backup_file }}.tmp"
-          rm "{{ backup_file }}.tmp"
+        if [ -n "$(ls -A *.tar.gz 2>/dev/null)" ]; then
+          # Extract individual volume backups and add to main archive
+          for volume_backup in *.tar.gz; do
+            volume_name=$(basename "$volume_backup" .tar.gz)
+            mkdir -p "volumes/$volume_name"
+            tar xzf "$volume_backup" -C "volumes/$volume_name"
+          done
+          # Add volumes directory to the main archive
+          tar --append -f "{{ backup_dir }}/{{ backup_file }}" volumes/ || tar czf "{{ backup_dir }}/{{ backup_file }}.new" -C "{{ service_dir | dirname }}" "{{ service_name }}" -C "{{ temp_backup_dir.path }}" volumes && mv "{{ backup_dir }}/{{ backup_file }}.new" "{{ backup_dir }}/{{ backup_file }}"
         fi
       when: service_volumes | length > 0
 
