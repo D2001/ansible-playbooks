@@ -97,6 +97,56 @@
          ('No package matching' in (docker_compose_apt_result.msg | default(''))))
       tags: packages
 
+    - name: Install Docker Compose V2 plugin manually if package not available
+      block:
+        - name: Create Docker CLI plugins directory
+          file:
+            path: /usr/local/lib/docker/cli-plugins
+            state: directory
+            mode: '0755'
+
+        - name: Set Docker Compose architecture
+          set_fact:
+            compose_arch: >-
+              {{ (
+                'linux-x86_64' if ansible_architecture == 'x86_64' else
+                'linux-aarch64' if ansible_architecture == 'aarch64' else
+                'linux-armv7' if ansible_architecture in ['armv7l'] else
+                'linux-armv6' if ansible_architecture in ['armv6l'] else
+                'unsupported'
+              ) | trim }}
+
+        - name: Download Docker Compose V2 plugin
+          get_url:
+            url: "https://github.com/docker/compose/releases/latest/download/docker-compose-{{ compose_arch }}"
+            dest: /usr/local/lib/docker/cli-plugins/docker-compose
+            mode: '0755'
+            owner: root
+            group: root
+          timeout: 300
+
+        - name: Create symlink to make plugin available system-wide
+          file:
+            src: /usr/local/lib/docker/cli-plugins/docker-compose
+            dest: /usr/bin/docker-compose
+            state: link
+            force: yes
+
+        - name: Test Docker Compose V2 plugin installation
+          shell: docker compose version
+          register: compose_v2_test
+          changed_when: false
+
+        - name: Display Docker Compose V2 version
+          debug:
+            msg: "Docker Compose V2 installed: {{ compose_v2_test.stdout }}"
+
+      when: >
+        ('No package matching' in docker_compose_plugin_result.msg) and
+        (docker_compose_apt_result is skipped or 
+         ('No package matching' in (docker_compose_apt_result.msg | default(''))))
+      tags: packages
+
     - name: Verify Docker Compose installation
       shell: |
         if command -v docker >/dev/null 2>&1; then

@@ -120,8 +120,10 @@
       shell: |
         if command -v docker >/dev/null 2>&1; then
           if docker compose version >/dev/null 2>&1; then
+            echo "Using docker compose (V2)"
             docker compose up -d
           elif docker-compose --version >/dev/null 2>&1; then
+            echo "Using docker-compose (V1)"
             docker-compose up -d
           else
             echo "No Docker Compose found"
@@ -134,6 +136,7 @@
       args:
         chdir: "{{ service_dir }}"
       register: container_start_result
+      failed_when: container_start_result.rc != 0
 
 - name: Wait for containers to be healthy
   pause:
@@ -151,8 +154,10 @@
       shell: |
         if command -v docker >/dev/null 2>&1; then
           if docker compose version >/dev/null 2>&1; then
+            echo "Checking status with docker compose (V2)"
             docker compose ps
           elif docker-compose --version >/dev/null 2>&1; then
+            echo "Checking status with docker-compose (V1)"
             docker-compose ps
           else
             echo "No Docker Compose found"
@@ -165,6 +170,7 @@
       args:
         chdir: "{{ service_dir }}"
       register: container_status
+      failed_when: false
 
 - name: Clean up temporary directory
   file:
