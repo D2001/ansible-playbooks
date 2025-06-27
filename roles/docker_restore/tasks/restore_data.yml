@@ -43,21 +43,67 @@
       - --no-same-owner
       - --no-same-permissions
 
-- name: Check for Docker volume backups
+- name: Check for Docker volume backups in new format (volumes directory)
+  find:
+    paths: "{{ temp_restore_dir.path }}/volumes"
+    file_type: directory
+    depth: 1
+  register: volume_dirs_found
+  when: temp_restore_dir.path is defined
+
+- name: Check for Docker volume backups in old format (tar.gz files)
   find:
     paths: "{{ temp_restore_dir.path }}"
     patterns: "*.tar.gz"
     file_type: file
   register: volume_backups_found
+  when: temp_restore_dir.path is defined
 
-- name: Create Docker volumes for restore
+- name: Set volume restoration method
+  set_fact:
+    use_new_format: "{{ (volume_dirs_found.files | default([])) | length > 0 }}"
+    use_old_format: "{{ (volume_backups_found.files | default([])) | length > 0 }}"
+
+- name: Display volume restoration info
+  debug:
+    msg: |
+      Volume restoration info:
+      - New format volumes found: {{ (volume_dirs_found.files | default([])) | length }}
+      - Old format volumes found: {{ (volume_backups_found.files | default([])) | length }}
+      - Using new format: {{ use_new_format }}
+      - Using old format: {{ use_old_format }}
+
+- name: Create Docker volumes for restore (new format)
+  community.docker.docker_volume:
+    name: "{{ item.path | basename }}"
+    state: present
+  loop: "{{ volume_dirs_found.files | default([]) }}"
+  when: use_new_format
+
+- name: Create Docker volumes for restore (old format)
   community.docker.docker_volume:
     name: "{{ item.path | basename | regex_replace('\\.tar\\.gz$', '') }}"
     state: present
-  loop: "{{ volume_backups_found.files }}"
-  when: volume_backups_found.files | length > 0
+  loop: "{{ volume_backups_found.files | default([]) }}"
+  when: use_old_format
 
-- name: Restore Docker volumes using Ansible Docker module
+- name: Restore Docker volumes (new format)
+  community.docker.docker_container:
+    name: "restore_{{ service_name }}_{{ item.path | basename }}"
+    image: alpine:latest
+    state: started
+    detach: false
+    cleanup: true
+    auto_remove: true
+    volumes:
+      - "{{ item.path | basename }}:/volume"
+      - "{{ item.path }}:/backup:ro"
+    command: sh -c "cd /volume && cp -a /backup/. ."
+  loop: "{{ volume_dirs_found.files | default([]) }}"
+  when: use_new_format
+  register: volume_restore_results_new
+
+- name: Restore Docker volumes (old format)
   community.docker.docker_container:
     name: "restore_{{ service_name }}_{{ item.path | basename | regex_replace('\\.tar\\.gz$', '') }}"
     image: alpine:latest
@@ -69,16 +115,26 @@
       - "{{ item.path | basename | regex_replace('\\.tar\\.gz$', '') }}:/volume"
       - "{{ temp_restore_dir.path }}:/backup:ro"
     command: sh -c "cd /volume && tar xzf /backup/{{ item.path | basename }}"
-  loop: "{{ volume_backups_found.files }}"
-  when: volume_backups_found.files | length > 0
-  register: volume_restore_results
+  loop: "{{ volume_backups_found.files | default([]) }}"
+  when: use_old_format
+  register: volume_restore_results_old
 
-- name: Remove volume files from temp directory
+- name: Set volume restore results
+  set_fact:
+    volume_restore_results: "{{ volume_restore_results_new if use_new_format else volume_restore_results_old }}"
+
+- name: Remove volume files from temp directory (old format)
   file:
     path: "{{ item.path }}"
     state: absent
-  loop: "{{ volume_backups_found.files }}"
-  when: volume_backups_found.files | length > 0
+  loop: "{{ volume_backups_found.files | default([]) }}"
+  when: use_old_format
+
+- name: Remove volumes directory from temp directory (new format)
+  file:
+    path: "{{ temp_restore_dir.path }}/volumes"
+    state: absent
+  when: use_new_format
 
 - name: Move service files to final location
   shell: |
