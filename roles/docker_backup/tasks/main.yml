@@ -23,7 +23,7 @@
     mode: '0755'
   loop:
     - "{{ backup_dir }}"
-    - "{{ nas_backup_dir }}"
+#    - "{{ nas_backup_dir }}"
 
 # Main backup process with error handling
 - block:

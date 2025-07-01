@@ -1,10 +1,10 @@
 ---
 # Upload operations that can run in parallel
-- name: Copy backup archive to SMB share
-  shell: cp "{{ backup_dir }}/{{ backup_file }}" "{{ nas_backup_dir }}/{{ backup_file }}"
-  async: 600
-  poll: 0
-  register: smb_upload_job
+#- name: Copy backup archive to SMB share
+#  shell: cp "{{ backup_dir }}/{{ backup_file }}" "{{ nas_backup_dir }}/{{ backup_file }}"
+#  async: 600
+#  poll: 0
+#  register: smb_upload_job
 
 - name: Upload archive to OneDrive with rclone
   shell: rclone copy "{{ backup_dir }}/{{ backup_file }}" "{{ rclone_remote }}" --progress
@@ -14,13 +14,13 @@
   poll: 0
   register: onedrive_upload_job
 
-- name: Wait for SMB upload to complete
-  async_status:
-    jid: "{{ smb_upload_job.ansible_job_id }}"
-  register: smb_upload_result
-  until: smb_upload_result.finished
-  retries: 120
-  delay: 5
+#- name: Wait for SMB upload to complete
+#  async_status:
+#    jid: "{{ smb_upload_job.ansible_job_id }}"
+#  register: smb_upload_result
+#  until: smb_upload_result.finished
+#  retries: 120
+#  delay: 5
 
 - name: Wait for OneDrive upload to complete
   async_status:
@@ -30,13 +30,13 @@
   retries: 1400
   delay: 5
 
-- name: Set file permissions on SMB backup
-  file:
-    path: "{{ nas_backup_dir }}/{{ backup_file }}"
-    owner: karsten
-    group: karsten
-    mode: '0644'
-  when: smb_upload_result.rc == 0
+#- name: Set file permissions on SMB backup
+#  file:
+#    path: "{{ nas_backup_dir }}/{{ backup_file }}"
+#    owner: karsten
+#    group: karsten
+#    mode: '0644'
+#  when: smb_upload_result.rc == 0
 
 - name: Cleanup old backups in parallel
   include_tasks: cleanup_backups.yml

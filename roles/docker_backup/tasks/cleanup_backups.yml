@@ -18,15 +18,15 @@
   changed_when: onedrive_cleanup.stdout != ""
   failed_when: false
 
-- name: Clean up old NAS backups
-  shell: |
-    if [ -d "{{ nas_backup_dir }}" ]; then
-      cd "{{ nas_backup_dir }}"
-      ls -1t {{ backup_pattern }} 2>/dev/null | tail -n +$(({{ max_nas_backups }} + 1)) | xargs -r rm -f
-    fi
-  register: nas_cleanup
-  changed_when: nas_cleanup.stdout != ""
-  failed_when: false
+#- name: Clean up old NAS backups
+#  shell: |
+#    if [ -d "{{ nas_backup_dir }}" ]; then
+#      cd "{{ nas_backup_dir }}"
+#      ls -1t {{ backup_pattern }} 2>/dev/null | tail -n +$(({{ max_nas_backups }} + 1)) | xargs -r rm -f
+#    fi
+#  register: nas_cleanup
+#  changed_when: nas_cleanup.stdout != ""
+#  failed_when: false
 
 - name: Display cleanup results
   debug:
@@ -34,4 +34,3 @@
       Cleanup completed:
       - Local: {{ 'Files removed' if local_cleanup.changed else 'No cleanup needed' }}
       - OneDrive: {{ 'Files removed' if onedrive_cleanup.changed else 'No cleanup needed' }}
-      - NAS: {{ 'Files removed' if nas_cleanup.changed else 'No cleanup needed' }}
