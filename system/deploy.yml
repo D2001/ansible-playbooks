@@ -71,19 +71,25 @@
         state: present
       register: docker_compose_apt_result
       failed_when: false
-      when: "'No package matching' in docker_compose_plugin_result.msg"
+      when:
+        - docker_compose_plugin_result is defined
+        - docker_compose_plugin_result.msg is defined
+        - "'No package matching' in docker_compose_plugin_result.msg"
       tags: packages
 
     - name: Ensure pip is installed for docker-compose fallback
       apt:
-        name: 
+        name:
           - python3-pip
           - python3-setuptools
         state: present
-      when: >
-        ('No package matching' in docker_compose_plugin_result.msg) and
-        (docker_compose_apt_result is skipped or 
-         ('No package matching' in (docker_compose_apt_result.msg | default(''))))
+      when:
+        - docker_compose_plugin_result is defined
+        - docker_compose_plugin_result.msg is defined
+        - "'No package matching' in docker_compose_plugin_result.msg"
+        - docker_compose_apt_result is not defined or
+          docker_compose_apt_result.msg is defined and
+          "'No package matching' in docker_compose_apt_result.msg"
       tags: packages
 
     - name: Install docker-compose from pip if other methods failed
@@ -91,10 +97,13 @@
         name: docker-compose
         state: present
         break_system_packages: true
-      when: >
-        ('No package matching' in docker_compose_plugin_result.msg) and
-        (docker_compose_apt_result is skipped or 
-         ('No package matching' in (docker_compose_apt_result.msg | default(''))))
+      when:
+        - docker_compose_plugin_result is defined
+        - docker_compose_plugin_result.msg is defined
+        - "'No package matching' in docker_compose_plugin_result.msg"
+        - docker_compose_apt_result is not defined or
+          docker_compose_apt_result.msg is defined and
+          "'No package matching' in docker_compose_apt_result.msg"
       tags: packages
 
     - name: Check if Docker Compose V2 plugin is available
@@ -291,14 +300,14 @@
       delegate_to: localhost
       when: not wg_conf_stat.stat.readable
 
-    - name: Copy WireGuard client config (avoid permission error)
-      copy:
-        src: files/{{ wg_config_src }}
-        dest: "/etc/wireguard/{{ wg_interface }}.conf"
-        owner: root
-        group: root
-        mode: "0600"
-      become: true
+#    - name: Copy WireGuard client config (avoid permission error)
+#      copy:
+#        src: files/{{ wg_config_src }}
+#        dest: "/etc/wireguard/{{ wg_interface }}.conf"
+#        owner: root
+#        group: root
+#        mode: "0600"
+#      become: true
 
     - name: Ensure IPv4 forwarding is enabled
       sysctl:
