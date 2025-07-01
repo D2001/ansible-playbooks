@@ -281,11 +281,11 @@
       failed_when: false
 
     # Stop the interface if running
-    - name: Stop WireGuard interface before replacing config
-      service:
-        name: wg-quick@{{ wg_interface }}
-        state: stopped
-      when: wg_status.stdout == "active"
+#    - name: Stop WireGuard interface before replacing config
+#      service:
+#        name: wg-quick@{{ wg_interface }}
+#        state: stopped
+#      when: wg_status.stdout == "active"
 
     - name: Ensure wg0.conf is readable before copying
       stat:
@@ -324,68 +324,68 @@
         enabled: true
 
     # ─── SMB Share Setup ─────────────────────────────
-    - name: Ensure mount point for paperless exists
-      file:
-        path: "{{ mount_paperless }}"
-        state: directory
-        mode: '0770'
-        owner: 1000
-        group: 1000
+ #   - name: Ensure mount point for paperless exists
+ #     file:
+ #       path: "{{ mount_paperless }}"
+ #       state: directory
+ #       mode: '0770'
+ #       owner: 1000
+ #       group: 1000
 
-    - name: Ensure mount point for backups exists
-      file:
-        path: "{{ mount_backups }}"
-        state: directory
-        mode: '0770'
-        owner: 1000
-        group: 1000
+ #   - name: Ensure mount point for backups exists
+ #     file:
+ #       path: "{{ mount_backups }}"
+ #       state: directory
+ #       mode: '0770'
+ #       owner: 1000
+ #       group: 1000
 
-    - name: Ensure mount point for public exists
-      file:
-        path: "{{ mount_public }}"
-        state: directory
-        mode: '0770'
-        owner: 1000
-        group: 1000
+ #   - name: Ensure mount point for public exists
+ #     file:
+ #       path: "{{ mount_public }}"
+ #       state: directory
+ #       mode: '0770'
+ #       owner: 1000
+ #       group: 1000
 
-    - name: Copy encrypted SMB credentials file
-      copy:
-        src: files/smb_credentials
-        dest: "{{ smb_credentials_path }}"
-        owner: root
-        group: root
-        mode: '0600'
+ #   - name: Copy encrypted SMB credentials file
+ #     copy:
+ #       src: files/smb_credentials
+ #       dest: "{{ smb_credentials_path }}"
+ #       owner: root
+ #       group: root
+ #       mode: '0600'
 
-    - name: Ensure fstab entries for SMB shares
-      blockinfile:
-        path: /etc/fstab
-        marker: "# {mark} ANSIBLE MANAGED SMB SHARES"
-        block: |
-          {{ smb_share_paperless }} {{ mount_paperless }} cifs {{ mount_opts }} 0 0
-          {{ smb_share_public }} {{ mount_public }} cifs {{ mount_opts }} 0 0
-          {{ smb_share_backups }} {{ mount_backups }} cifs {{ mount_opts }} 0 0
-        backup: yes
+ #   - name: Ensure fstab entries for SMB shares
+ #     blockinfile:
+ #       path: /etc/fstab
+ #       marker: "# {mark} ANSIBLE MANAGED SMB SHARES"
+ #       block: |
+ #         {{ smb_share_paperless }} {{ mount_paperless }} cifs {{ mount_opts }} 0 0
+ #         {{ smb_share_public }} {{ mount_public }} cifs {{ mount_opts }} 0 0
+ #         {{ smb_share_backups }} {{ mount_backups }} cifs {{ mount_opts }} 0 0
+ #       backup: yes
 
-    - name: Ensure paperless share is mounted
-      mount:
-        path: "{{ mount_paperless }}"
-        src: "{{ smb_share_paperless }}"
-        fstype: cifs
-        opts: "{{ mount_opts }}"
-        state: mounted
+ #   - name: Ensure paperless share is mounted
+ #     mount:
+ #       path: "{{ mount_paperless }}"
+ #       src: "{{ smb_share_paperless }}"
+ #       fstype: cifs
+ #       opts: "{{ mount_opts }}"
+ #       state: mounted
 
-    - name: Ensure paperless share is mounted
-      mount:
-        path: "{{ mount_backups }}"
-        src: "{{ smb_share_backups }}"
-        fstype: cifs
-        opts: "{{ mount_opts }}"
-        state: mounted
+ #   - name: Ensure paperless share is mounted
+ #     mount:
+ #       path: "{{ mount_backups }}"
+ #       src: "{{ smb_share_backups }}"
+ #       fstype: cifs
+ #       opts: "{{ mount_opts }}"
+ #       state: mounted
 
-    - name: Ensure public share is mounted
-      mount:
-        path: "{{ mount_public }}"
-        src: "{{ smb_share_public }}"
-        fstype: cifs
-        opts: "{{ mount_opts }}"
-        state: mounted
+ #   - name: Ensure public share is mounted
+ #     mount:
+ #       path: "{{ mount_public }}"
+ #       src: "{{ smb_share_public }}"
+ #       fstype: cifs
+ #       opts: "{{ mount_opts }}"
+ #       state: mounted
