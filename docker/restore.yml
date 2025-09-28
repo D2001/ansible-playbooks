@@ -41,6 +41,7 @@
         - docker
         - tar
         - rclone
+        - rsync
       register: command_check
       failed_when: command_check.rc != 0
       changed_when: false

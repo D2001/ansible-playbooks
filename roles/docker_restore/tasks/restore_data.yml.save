@@ -87,28 +87,18 @@
   loop: "{{ volume_backups_found.files | default([]) }}"
   when: use_old_format
 
-- name: Inspect Docker volumes for restore (new format)
-  community.docker.docker_volume_info:
-    name: "{{ item.path | basename }}"
+community.docker.docker_container:
+    name: "restore_{{ service_name }}_{{ item.path | basename }}"
+    image: alpine:latest
+    state: started
+    detach: false
+    cleanup: true
+    auto_remove: true
+    volumes:
+      - "{{ item.path | basename }}:/volume"
+      - "{{ item.path }}:/backup:ro"
+    command: sh -c "cd /volume && cp -a /backup/. ."
   loop: "{{ volume_dirs_found.files | default([]) }}"
-  when: use_new_format
-  register: volume_inspect_new
-
-- name: Restore Docker volumes from backup (new format)
-  become: true
-  shell: |
-    set -e
-    backup_dir="{{ item.item.path }}"
-    mountpoint="{{ item.volume.Mountpoint }}"
-
-    if [ ! -d "$mountpoint" ]; then
-      mkdir -p "$mountpoint"
-    fi
-
-    rsync -a --delete "$backup_dir/" "$mountpoint/"
-  args:
-    executable: /bin/bash
-  loop: "{{ volume_inspect_new.results | default([]) }}"
   when: use_new_format
   register: volume_restore_results_new
 
@@ -130,12 +120,7 @@
 
 - name: Set volume restore results
   set_fact:
-    volume_restore_results: "{{ {
-      'results': (
-        ((volume_restore_results_new | default({})).get('results', [])) +
-        ((volume_restore_results_old | default({})).get('results', []))
-      )
-    } }}"
+    volume_restore_results: "{{ volume_restore_results_new if use_new_format else volume_restore_results_old }}"
 
 - name: Remove volume files from temp directory (old format)
   file:
