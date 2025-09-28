@@ -122,7 +122,7 @@
       stat:
         path: "{{ backup_dir }}/{{ backup_file }}"
       register: backup_stat
-      failed_when: not backup_stat.stat.exists or backup_stat.stat.size < 1024
+      failed_when: not backup_stat.stat.exists or (backup_stat.stat.size | default(0)) == 0
 
     - name: Upload Backup
       include_tasks: upload_backup.yml

@@ -90,6 +90,26 @@ mkdir -p "$LOGDIR" || {
     exit 1
 }
 
+# Ensure the log file is writable by the current user
+if [[ -e "$LOGFILE" && ! -w "$LOGFILE" ]]; then
+    echo "WARNING: Existing log file $LOGFILE is not writable; rotating stale copy" >&2
+    STALE_LOGFILE="${LOGFILE}.${RUN_TS}.stale"
+    if ! command mv "$LOGFILE" "$STALE_LOGFILE" 2>/dev/null; then
+        if ! rm -f "$LOGFILE" 2>/dev/null; then
+            echo "ERROR: Unable to rotate or remove unwritable log file $LOGFILE" >&2
+            exit 1
+        fi
+    fi
+fi
+
+if [[ ! -e "$LOGFILE" ]]; then
+    : > "$LOGFILE" || {
+        echo "ERROR: Cannot create log file $LOGFILE" >&2
+        exit 1
+    }
+    chmod 0644 "$LOGFILE" >/dev/null 2>&1 || true
+fi
+
 # --- run ansible with line-by-line timestamps, tee to log ------------------
 echo "Starting ansible-playbook: $PLAYBOOK" >&2
 echo "Arguments: $@" >&2
@@ -107,7 +127,7 @@ echo "[INFO] Ansible playbook completed with exit code: $EXIT_CODE" | ts "$TIMES
 # Clean up log file to keep only last 1000 lines
 if [[ -f "$LOGFILE" ]]; then
     TEMP_LOGFILE="${LOGFILE}.tmp"
-    tail -n 1000 "$LOGFILE" > "$TEMP_LOGFILE" && mv "$TEMP_LOGFILE" "$LOGFILE"
+    tail -n 1000 "$LOGFILE" > "$TEMP_LOGFILE" && command mv "$TEMP_LOGFILE" "$LOGFILE"
     echo "[INFO] Log file trimmed" | ts "$TIMESTAMP_FORMAT" >> "$LOGFILE"
 fi
 
