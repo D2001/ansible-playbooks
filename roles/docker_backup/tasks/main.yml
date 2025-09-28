@@ -80,37 +80,55 @@
       register: temp_backup_dir
       when: service_volumes | length > 0
 
-    - name: Backup Docker volumes using Ansible Docker module
-      community.docker.docker_container:
-        name: "backup_{{ service_name }}_{{ item }}"
-        image: alpine:latest
-        state: started
-        detach: false
-        cleanup: true
-        auto_remove: true
-        volumes:
+    - name: Backup Docker volumes
+      command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - -v
           - "{{ item }}:/volume:ro"
+          - -v
           - "{{ temp_backup_dir.path }}:/backup"
-        command: tar czf /backup/{{ item }}.tar.gz -C /volume .
+          - alpine:3.19
+          - /bin/sh
+          - -c
+          - "tar czf /backup/{{ item }}.tar.gz -C /volume ."
       loop: "{{ service_volumes }}"
+      loop_control:
+        label: "{{ item }}"
       when: service_volumes | length > 0
 
     - name: Create combined archive with volumes
       shell: |
-        cd "{{ service_dir | dirname }}"
-        tar czf "{{ backup_dir }}/{{ backup_file }}" "{{ service_name }}"
-        cd {{ temp_backup_dir.path }}
-        if [ -n "$(ls -A *.tar.gz 2>/dev/null)" ]; then
-          # Extract individual volume backups and add to main archive
+        set -euo pipefail
+        BACKUP_TAR_GZ="{{ backup_dir }}/{{ backup_file }}"
+        BACKUP_TAR="${BACKUP_TAR_GZ%.gz}"
+        SERVICE_DIR_NAME="{{ service_dir | basename }}"
+        SERVICE_PARENT="{{ service_dir | dirname }}"
+        TEMP_DIR="{{ temp_backup_dir.path }}"
+
+        rm -f "$BACKUP_TAR" "$BACKUP_TAR_GZ"
+
+        cd "$SERVICE_PARENT"
+        tar cf "$BACKUP_TAR" "$SERVICE_DIR_NAME"
+
+        cd "$TEMP_DIR"
+        if ls *.tar.gz >/dev/null 2>&1; then
+          rm -rf volumes
+          mkdir -p volumes
           for volume_backup in *.tar.gz; do
             volume_name=$(basename "$volume_backup" .tar.gz)
             mkdir -p "volumes/$volume_name"
             tar xzf "$volume_backup" -C "volumes/$volume_name"
           done
-          # Add volumes directory to the main archive
-          tar --append -f "{{ backup_dir }}/{{ backup_file }}" volumes/ || tar czf "{{ backup_dir }}/{{ backup_file }}.new" -C "{{ service_dir | dirname }}" "{{ service_name }}" -C "{{ temp_backup_dir.path }}" volumes && mv "{{ backup_dir }}/{{ backup_file }}.new" "{{ backup_dir }}/{{ backup_file }}"
+          tar --append -f "$BACKUP_TAR" -C "$TEMP_DIR" volumes
         fi
+
+        gzip -f "$BACKUP_TAR"
       when: service_volumes | length > 0
+      args:
+        executable: /bin/bash
 
     - name: Clean up temporary backup directory
       file:
