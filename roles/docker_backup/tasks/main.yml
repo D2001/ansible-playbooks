@@ -122,7 +122,16 @@
             mkdir -p "volumes/$volume_name"
             tar xzf "$volume_backup" -C "volumes/$volume_name"
           done
-          tar --append -f "$BACKUP_TAR" -C "$TEMP_DIR" volumes
+
+          unreadable_files=$(find volumes -type f ! -perm -u+r -print)
+          if [ -n "$unreadable_files" ]; then
+            echo "⚠ Skipping unreadable files during archive packaging:" >&2
+            while IFS= read -r file; do
+              printf '  - %s\n' "$file" >&2
+            done <<< "$unreadable_files"
+          fi
+
+          tar --append --ignore-failed-read -f "$BACKUP_TAR" -C "$TEMP_DIR" volumes
         fi
 
         gzip -f "$BACKUP_TAR"
