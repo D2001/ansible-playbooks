@@ -1,87 +1,189 @@
 ---
-# Main backup tasks for Docker services
-
-# Pre-flight checks
 - name: Verify service directory exists
-  stat:
+  ansible.builtin.stat:
     path: "{{ service_dir }}"
   register: service_dir_stat
-  failed_when: not service_dir_stat.stat.exists
 
-- name: Verify docker-compose file exists
-  stat:
+- name: Require service directory
+  ansible.builtin.assert:
+    that:
+      - service_dir_stat.stat.exists
+      - service_dir_stat.stat.isdir
+    fail_msg: "Service directory does not exist: {{ service_dir }}"
+
+- name: Verify Docker Compose file exists
+  ansible.builtin.stat:
     path: "{{ compose_file }}"
   register: compose_file_stat
-  failed_when: not compose_file_stat.stat.exists
+
+- name: Require Docker Compose file
+  ansible.builtin.assert:
+    that:
+      - compose_file_stat.stat.exists
+      - compose_file_stat.stat.isreg
+    fail_msg: "Docker Compose file does not exist: {{ compose_file }}"
+
+- name: Verify NAS backup root is mounted
+  ansible.builtin.command:
+    argv:
+      - mountpoint
+      - -q
+      - "{{ nas_backup_dir | dirname }}"
+  changed_when: false
 
 - name: Ensure backup directories exist
-  file:
+  ansible.builtin.file:
     path: "{{ item }}"
     state: directory
     owner: karsten
     group: karsten
-    mode: '0755'
+    mode: "0755"
   loop:
     - "{{ backup_dir }}"
     - "{{ nas_backup_dir }}"
 
-# Main backup process with error handling
-- block:
-    - name: Stop {{ service_name }} containers
+- name: Remove stale incomplete local archives
+  ansible.builtin.shell: |
+    set -euo pipefail
+
+    find "{{ backup_dir }}" \
+      -maxdepth 1 \
+      -type f \
+      \( \
+        -name "{{ service_name }}_backup_*.tar" \
+        -o -name ".{{ service_name }}_backup_*.tar.gz.partial" \
+        -o -name "{{ service_name }}_backup_*.tar.gz.partial" \
+      \) \
+      -print \
+      -delete
+  args:
+    executable: /bin/bash
+  register: stale_precleanup
+  changed_when: stale_precleanup.stdout | length > 0
+
+- name: Determine available local backup space
+  ansible.builtin.shell: |
+    set -euo pipefail
+    df -Pm "{{ backup_dir }}" | awk 'NR == 2 {print $4}'
+  args:
+    executable: /bin/bash
+  register: backup_free_mb
+  changed_when: false
+
+- name: Require sufficient local backup space
+  ansible.builtin.assert:
+    that:
+      - (backup_free_mb.stdout | int) >= (min_free_space_mb | int)
+    fail_msg: >-
+      Only {{ backup_free_mb.stdout }} MB are available below
+      {{ backup_dir }}. At least {{ min_free_space_mb }} MB are required.
+
+- name: Read declared Docker Compose volumes
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - config
+      - --volumes
+  args:
+    chdir: "{{ service_dir }}"
+  register: declared_volumes_result
+  changed_when: false
+
+- name: Discover volumes actually mounted by this Compose project
+  ansible.builtin.shell: |
+    set -euo pipefail
+
+    mapfile -t container_ids < <(
+      docker ps -aq \
+        --filter "label=com.docker.compose.project={{ service_name }}"
+    )
+
+    if [[ -z "${container_ids[0]-}" ]]; then
+      exit 0
+    fi
+
+    docker inspect "${container_ids[@]}" |
+      python3 -c '
+    import json
+    import sys
+
+    containers = json.load(sys.stdin)
+    names = {
+        mount["Name"]
+        for container in containers
+        for mount in container.get("Mounts", [])
+        if mount.get("Type") == "volume" and mount.get("Name")
+    }
+
+    sys.stdout.write("\n".join(sorted(names)))
+    '
+  args:
+    executable: /bin/bash
+  register: mounted_volumes_result
+  changed_when: false
+
+- name: Store declared and mounted volumes
+  ansible.builtin.set_fact:
+    declared_service_volumes: >-
+      {{
+        declared_volumes_result.stdout_lines
+        | default([])
+        | reject('equalto', '')
+        | list
+      }}
+    service_volumes: >-
+      {{
+        mounted_volumes_result.stdout_lines
+        | default([])
+        | reject('equalto', '')
+        | list
+      }}
+
+- name: Verify declared volumes were discovered
+  ansible.builtin.assert:
+    that:
+      - >-
+        declared_service_volumes | length == 0
+        or service_volumes | length >= declared_service_volumes | length
+    fail_msg: >-
+      Docker Compose declares {{ declared_service_volumes | length }}
+      active volume(s), but only {{ service_volumes | length }}
+      mounted volume(s) were discovered. Backup aborted before stopping containers.
+
+- name: Initialize backup status
+  ansible.builtin.set_fact:
+    docker_backup_failed: false
+    docker_backup_error: ""
+    backup_upload_completed: false
+
+- name: Create Docker backup
+  block:
+    - name: Stop service containers
       block:
-        - name: Stop containers using Docker Compose V2 module
+        - name: Stop containers using Docker Compose module
           community.docker.docker_compose_v2:
             project_src: "{{ service_dir }}"
             state: absent
-          register: stop_result
+
       rescue:
-        - name: Stop containers using shell command (fallback)
-          shell: |
-            if command -v docker >/dev/null 2>&1; then
-              if docker compose version >/dev/null 2>&1; then
-                docker compose down
-              elif docker-compose --version >/dev/null 2>&1; then
-                docker-compose down
-              else
-                echo "No Docker Compose found"
-                exit 1
-              fi
-            else
-              echo "Docker not found"
-              exit 1
-            fi
+        - name: Stop containers using Docker Compose command
+          ansible.builtin.command:
+            argv:
+              - docker
+              - compose
+              - down
           args:
             chdir: "{{ service_dir }}"
-          register: stop_result
 
-    - name: Check for Docker volumes related to {{ service_name }}
-      shell: docker volume ls --format "{{ '{{' }}.Name{{ '}}' }}" | grep "^{{ service_name }}_"
-      register: volumes_result
-      failed_when: false
-
-    - name: Filter volumes for this service
-      set_fact:
-        service_volumes: "{{ volumes_result.stdout_lines if volumes_result.rc == 0 else [] }}"
-
-    - name: Create archive (no volumes case)
-      community.general.archive:
-        path: "{{ service_dir }}"
-        dest: "{{ backup_dir }}/{{ backup_file }}"
-        format: gz
-        owner: karsten
-        group: karsten
-        mode: '0644'
-      when: service_volumes | length == 0
-
-    - name: Create temporary directory for volume backups
-      tempfile:
+    - name: Create temporary backup directory
+      ansible.builtin.tempfile:
         state: directory
-        suffix: _{{ service_name }}_backup
+        suffix: "_{{ service_name }}_backup"
       register: temp_backup_dir
-      when: service_volumes | length > 0
 
-    - name: Backup Docker volumes
-      command:
+    - name: Backup mounted Docker volumes
+      ansible.builtin.command:
         argv:
           - docker
           - run
@@ -97,101 +199,184 @@
       loop: "{{ service_volumes }}"
       loop_control:
         label: "{{ item }}"
-      when: service_volumes | length > 0
 
-    - name: Create combined archive with volumes
-      shell: |
-        set -euo pipefail
-        BACKUP_TAR_GZ="{{ backup_dir }}/{{ backup_file }}"
-        BACKUP_TAR="${BACKUP_TAR_GZ%.gz}"
-        SERVICE_DIR_NAME="{{ service_dir | basename }}"
-        SERVICE_PARENT="{{ service_dir | dirname }}"
-        TEMP_DIR="{{ temp_backup_dir.path }}"
+    - name: Prepare final archive staging directory
+      ansible.builtin.file:
+        path: "{{ temp_backup_dir.path }}/archive-root"
+        state: directory
+        mode: "0755"
 
-        rm -f "$BACKUP_TAR" "$BACKUP_TAR_GZ"
+    - name: Create and validate final compressed archive
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - -v
+          - "{{ temp_backup_dir.path }}:/work"
+          - -v
+          - "{{ service_dir }}:/work/archive-root/{{ service_name }}:ro"
+          - -v
+          - "{{ backup_dir }}:/backup"
+          - alpine:3.19
+          - /bin/sh
+          - -c
+          - |
+            set -eu
+            set -o pipefail
 
-        cd "$SERVICE_PARENT"
-        tar cf "$BACKUP_TAR" "$SERVICE_DIR_NAME"
+            FINAL="/backup/{{ backup_file }}"
+            PARTIAL="/backup/.{{ backup_file }}.partial"
+            ARCHIVE_ROOT="/work/archive-root"
+            ARCHIVE_LIST="/work/archive-list.txt"
+            SERVICE_NAME="{{ service_name }}"
+            BACKUP_OWNER="$(stat -c '%u:%g' /backup)"
 
-        cd "$TEMP_DIR"
-        if ls *.tar.gz >/dev/null 2>&1; then
-          rm -rf volumes
-          mkdir -p volumes
-          for volume_backup in *.tar.gz; do
-            volume_name=$(basename "$volume_backup" .tar.gz)
-            mkdir -p "volumes/$volume_name"
-            tar xzf "$volume_backup" -C "volumes/$volume_name"
-          done
+            cleanup_workdir() {
+              rm -rf "$ARCHIVE_ROOT/volumes"
+              rm -f "$ARCHIVE_LIST"
+            }
 
-          unreadable_files=$(find volumes -type f ! -perm -u+r -print)
-          if [ -n "$unreadable_files" ]; then
-            echo "⚠ Skipping unreadable files during archive packaging:" >&2
-            while IFS= read -r file; do
-              printf '  - %s\n' "$file" >&2
-            done <<< "$unreadable_files"
-          fi
+            trap cleanup_workdir EXIT
 
-          tar --append --ignore-failed-read -f "$BACKUP_TAR" -C "$TEMP_DIR" volumes
-        fi
+            rm -f -- "$FINAL" "$PARTIAL" "$ARCHIVE_LIST"
+            rm -rf "$ARCHIVE_ROOT/volumes"
+            mkdir -p "$ARCHIVE_ROOT/volumes"
 
-        gzip -f "$BACKUP_TAR"
-      when: service_volumes | length > 0
-      args:
-        executable: /bin/bash
+            test -d "$ARCHIVE_ROOT/$SERVICE_NAME"
+            test -f "$ARCHIVE_ROOT/$SERVICE_NAME/docker-compose.yml"
 
-    - name: Clean up temporary backup directory
-      file:
-        path: "{{ temp_backup_dir.path }}"
-        state: absent
-      when: service_volumes | length > 0
+            found_volume=0
 
-    - name: Verify backup file was created
-      stat:
-        path: "{{ backup_dir }}/{{ backup_file }}"
-      register: backup_stat
-      failed_when: not backup_stat.stat.exists or (backup_stat.stat.size | default(0)) == 0
+            for volume_archive in /work/*.tar.gz; do
+              [ -e "$volume_archive" ] || break
 
-    - name: Upload Backup
-      include_tasks: upload_backup.yml
+              found_volume=1
+              volume_name="$(basename "$volume_archive" .tar.gz)"
 
-    - name: Cleanup backups
-      include_tasks: cleanup_backups.yml
+              mkdir -p "$ARCHIVE_ROOT/volumes/$volume_name"
 
-  rescue:
-    - name: Log backup failure
-      debug:
-        msg: "Backup failed: {{ ansible_failed_result.msg | default('Unknown error') }}"
-      
-    - name: Fail the playbook
-      fail:
-        msg: "Backup process failed, but containers will be restarted"
+              tar -xzf "$volume_archive"                 -C "$ARCHIVE_ROOT/volumes/$volume_name"
+            done
 
-  always:
-    - name: Start {{ service_name }} containers
+            if [ "$found_volume" -eq 1 ]; then
+              tar -cf -                 -C "$ARCHIVE_ROOT"                 "$SERVICE_NAME" volumes |
+                gzip -1 > "$PARTIAL"
+            else
+              tar -cf -                 -C "$ARCHIVE_ROOT"                 "$SERVICE_NAME" |
+                gzip -1 > "$PARTIAL"
+            fi
+
+            gzip -t "$PARTIAL"
+            tar -tzf "$PARTIAL" > "$ARCHIVE_LIST"
+
+            grep -Fqx               "$SERVICE_NAME/docker-compose.yml"               "$ARCHIVE_LIST"
+
+            if [ "$found_volume" -eq 1 ]; then
+              for volume_dir in "$ARCHIVE_ROOT"/volumes/*; do
+                [ -d "$volume_dir" ] || continue
+
+                volume_name="$(basename "$volume_dir")"
+
+                grep -Fqx                   "volumes/$volume_name/"                   "$ARCHIVE_LIST"
+              done
+            fi
+
+            test -s "$PARTIAL"
+
+            mv -f -- "$PARTIAL" "$FINAL"
+            chown "$BACKUP_OWNER" "$FINAL"
+            chmod 0644 "$FINAL"
+
+            echo "Created and validated: $FINAL"
+
+    - name: Start service containers before uploads
       block:
-        - name: Start containers using Docker Compose V2 module
+        - name: Start containers using Docker Compose module
           community.docker.docker_compose_v2:
             project_src: "{{ service_dir }}"
             state: present
-          register: start_result
+
       rescue:
-        - name: Start containers using shell command (fallback)
-          shell: |
-            if command -v docker >/dev/null 2>&1; then
-              if docker compose version >/dev/null 2>&1; then
-                docker compose up -d
-              elif docker-compose --version >/dev/null 2>&1; then
-                docker-compose up -d
-              else
-                echo "No Docker Compose found"
-                exit 1
-              fi
-            else
-              echo "Docker not found"
-              exit 1
-            fi
+        - name: Start containers using Docker Compose command
+          ansible.builtin.command:
+            argv:
+              - docker
+              - compose
+              - up
+              - -d
           args:
             chdir: "{{ service_dir }}"
-          register: start_result
 
+    - name: Upload and verify backup copies
+      ansible.builtin.include_tasks: upload_backup.yml
 
+    - name: Mark uploads successful
+      ansible.builtin.set_fact:
+        backup_upload_completed: true
+
+  rescue:
+    - name: Record backup failure
+      ansible.builtin.set_fact:
+        docker_backup_failed: true
+        docker_backup_error: >-
+          {{
+            ansible_failed_result.stderr
+            | default(
+                ansible_failed_result.msg
+                | default('Unknown backup error')
+              )
+          }}
+
+  always:
+    - name: Remove temporary backup directory
+      ansible.builtin.file:
+        path: "{{ temp_backup_dir.path }}"
+        state: absent
+      when:
+        - temp_backup_dir is defined
+        - temp_backup_dir.path is defined
+
+    - name: Remove incomplete local archive artifacts
+      ansible.builtin.shell: |
+        find "{{ backup_dir }}" \
+          -maxdepth 1 \
+          -type f \
+          \( \
+            -name "{{ service_name }}_backup_*.tar" \
+            -o -name ".{{ service_name }}_backup_*.tar.gz.partial" \
+            -o -name "{{ service_name }}_backup_*.tar.gz.partial" \
+          \) \
+          -print \
+          -delete
+      args:
+        executable: /bin/bash
+      register: stale_postcleanup
+      changed_when: stale_postcleanup.stdout | length > 0
+      failed_when: false
+
+    - name: Ensure service containers are running
+      block:
+        - name: Ensure containers are running using module
+          community.docker.docker_compose_v2:
+            project_src: "{{ service_dir }}"
+            state: present
+
+      rescue:
+        - name: Ensure containers are running using command
+          ansible.builtin.command:
+            argv:
+              - docker
+              - compose
+              - up
+              - -d
+          args:
+            chdir: "{{ service_dir }}"
+
+    - name: Apply backup retention
+      ansible.builtin.include_tasks: cleanup_backups.yml
+
+- name: Fail after containers and cleanup were handled
+  ansible.builtin.fail:
+    msg: "Backup of {{ service_name }} failed: {{ docker_backup_error }}"
+  when: docker_backup_failed | bool

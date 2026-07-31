@@ -19,7 +19,7 @@ TIMESTAMP_FORMAT="[%Y-%m-%d %H:%M:%S]"       # per-line timestamp
 # ------------------------------------
 
 # Check for required commands
-for cmd in ansible-playbook ts; do
+for cmd in ansible-playbook ts flock; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
         echo "ERROR: Required command '$cmd' not found in PATH" >&2
         exit 1
@@ -81,6 +81,21 @@ for arg in "$@"; do
     fi
 done
 # ---------------------------------------------------------------------------
+
+# Serialize Docker backups so services cannot overlap.
+LOCKDIR="/home/karsten/.cache/backup-locks"
+mkdir -p "$LOCKDIR" || {
+    echo "ERROR: Cannot create lock directory $LOCKDIR" >&2
+    exit 1
+}
+
+LOCKFILE="$LOCKDIR/docker-backup-global.lock"
+exec 9>"$LOCKFILE"
+
+if ! flock -w 3600 9; then
+    echo "ERROR: Could not acquire backup lock within 3600 seconds" >&2
+    exit 75
+fi
 
 RUN_TS=$(date '+%Y-%m-%d_%H-%M-%S')
 LOGFILE="${LOGDIR}/${SERVICE_NAME}_${PLAYBOOK_BASE}.log"

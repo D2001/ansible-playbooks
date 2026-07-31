@@ -1,37 +1,105 @@
 ---
-# Remove old backup files based on retention settings
+- name: Keep configured number of local backups
+  ansible.builtin.shell: |
+    set -u
 
-- name: Clean up old local backups
-  shell: |
-    cd "{{ backup_dir }}"
-    ls -1t {{ backup_pattern }} 2>/dev/null | tail -n +$(({{ max_local_backups }} + 1)) | xargs -r rm -f
-  register: local_cleanup
-  changed_when: local_cleanup.stdout != ""
+    cd "{{ backup_dir }}" || exit 0
 
-- name: Clean up old OneDrive backups
-  shell: |
-    rclone ls "{{ rclone_remote }}" | awk '{print $2}' | grep '^{{ service_name }}_backup_.*\.tar\.gz$' | sort -r | tail -n +$(({{ max_onedrive_backups }} + 1)) | while read file; do
-      echo "Deleting: $file"
-      rclone delete "{{ rclone_remote }}/$file"
+    mapfile -t files < <(
+      find . \
+        -maxdepth 1 \
+        -type f \
+        -name "{{ backup_pattern }}" \
+        -printf '%f\n' |
+      sort -r
+    )
+
+    index=0
+    for file in "${files[@]}"; do
+      if (( index >= {{ max_local_backups }} )); then
+        echo "Deleting local backup: $file"
+        rm -f -- "$file"
+      fi
+      index=$((index + 1))
     done
-  register: onedrive_cleanup
-  changed_when: onedrive_cleanup.stdout != ""
+  args:
+    executable: /bin/bash
+  register: local_cleanup
+  changed_when: local_cleanup.stdout | length > 0
   failed_when: false
 
-- name: Clean up old NAS backups
-  shell: |
-    if [ -d "{{ nas_backup_dir }}" ]; then
-      cd "{{ nas_backup_dir }}"
-      ls -1t {{ backup_pattern }} 2>/dev/null | tail -n +$(({{ max_nas_backups }} + 1)) | xargs -r rm -f
-    fi
+- name: Keep configured number of NAS backups
+  ansible.builtin.shell: |
+    set -u
+
+    mountpoint -q "{{ nas_backup_dir | dirname }}" || exit 0
+    cd "{{ nas_backup_dir }}" || exit 0
+
+    mapfile -t files < <(
+      find . \
+        -maxdepth 1 \
+        -type f \
+        -name "{{ backup_pattern }}" \
+        -printf '%f\n' |
+      sort -r
+    )
+
+    index=0
+    for file in "${files[@]}"; do
+      if (( index >= {{ max_nas_backups }} )); then
+        echo "Deleting NAS backup: $file"
+        rm -f -- "$file"
+      fi
+      index=$((index + 1))
+    done
+
+    find . \
+      -maxdepth 1 \
+      -type f \
+      -name ".{{ service_name }}_backup_*.tar.gz.partial" \
+      -print \
+      -delete
+  args:
+    executable: /bin/bash
   register: nas_cleanup
-  changed_when: nas_cleanup.stdout != ""
+  changed_when: nas_cleanup.stdout | length > 0
   failed_when: false
+  when: backup_upload_completed | default(false) | bool
 
-- name: Display cleanup results
-  debug:
-    msg: |
-      Cleanup completed:
-      - Local: {{ 'Files removed' if local_cleanup.changed else 'No cleanup needed' }}
-      - OneDrive: {{ 'Files removed' if onedrive_cleanup.changed else 'No cleanup needed' }}
-      - NAS: {{ 'Files removed' if nas_cleanup.changed else 'No cleanup needed' }}
+- name: Keep configured number of OneDrive backups
+  ansible.builtin.shell: |
+    set -u
+
+    mapfile -t files < <(
+      rclone lsf "{{ rclone_remote }}" --files-only 2>/dev/null |
+      grep -E '^{{ service_name }}_backup_[0-9]{8}T[0-9]{6}\.tar\.gz$' |
+      sort -r ||
+      true
+    )
+
+    index=0
+    for file in "${files[@]}"; do
+      if (( index >= {{ max_onedrive_backups }} )); then
+        echo "Deleting OneDrive backup: $file"
+        rclone deletefile "{{ rclone_remote }}/$file"
+      fi
+      index=$((index + 1))
+    done
+  args:
+    executable: /bin/bash
+  register: onedrive_cleanup
+  changed_when: onedrive_cleanup.stdout | length > 0
+  failed_when: false
+  when: backup_upload_completed | default(false) | bool
+
+- name: Display backup retention result
+  ansible.builtin.debug:
+    msg:
+      service: "{{ service_name }}"
+      local_keep: "{{ max_local_backups }}"
+      nas_keep: "{{ max_nas_backups }}"
+      onedrive_keep: "{{ max_onedrive_backups }}"
+      uploads_completed: "{{ backup_upload_completed | default(false) }}"
+      local_changed: "{{ local_cleanup.changed | default(false) }}"
+      nas_changed: "{{ nas_cleanup.changed | default(false) }}"
+      onedrive_changed: "{{ onedrive_cleanup.changed | default(false) }}"

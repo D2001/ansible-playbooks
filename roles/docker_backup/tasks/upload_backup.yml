@@ -1,42 +1,104 @@
 ---
-# Upload operations that can run in parallel
-- name: Copy backup archive to SMB share
-  shell: cp "{{ backup_dir }}/{{ backup_file }}" "{{ nas_backup_dir }}/{{ backup_file }}"
-  async: 600
-  poll: 0
-  register: smb_upload_job
+- name: Initialize upload error list
+  ansible.builtin.set_fact:
+    backup_upload_errors: []
 
-- name: Upload archive to OneDrive with rclone
-  shell: rclone copy "{{ backup_dir }}/{{ backup_file }}" "{{ rclone_remote }}" --progress
-  args:
-    executable: /bin/bash
-  async: 1800
-  poll: 0
-  register: onedrive_upload_job
+- name: Copy and verify backup on NAS
+  block:
+    - name: Copy backup atomically to NAS
+      ansible.builtin.shell: |
+        set -euo pipefail
 
-- name: Wait for SMB upload to complete
-  async_status:
-    jid: "{{ smb_upload_job.ansible_job_id }}"
-  register: smb_upload_result
-  until: smb_upload_result.finished
-  retries: 120
-  delay: 5
+        SOURCE="{{ backup_dir }}/{{ backup_file }}"
+        TARGET="{{ nas_backup_dir }}/{{ backup_file }}"
+        PARTIAL="{{ nas_backup_dir }}/.{{ backup_file }}.partial"
 
-- name: Wait for OneDrive upload to complete
-  async_status:
-    jid: "{{ onedrive_upload_job.ansible_job_id }}"
-  register: onedrive_upload_result
-  until: onedrive_upload_result.finished
-  retries: 1400
-  delay: 5
+        rm -f -- "$PARTIAL"
 
-- name: Set file permissions on SMB backup
-  file:
-    path: "{{ nas_backup_dir }}/{{ backup_file }}"
-    owner: karsten
-    group: karsten
-    mode: '0644'
-  when: smb_upload_result.rc == 0
+        cp -- "$SOURCE" "$PARTIAL"
 
-- name: Cleanup old backups in parallel
-  include_tasks: cleanup_backups.yml
+        LOCAL_SIZE="$(stat -c %s "$SOURCE")"
+        NAS_SIZE="$(stat -c %s "$PARTIAL")"
+
+        test "$LOCAL_SIZE" = "$NAS_SIZE"
+
+        mv -f -- "$PARTIAL" "$TARGET"
+        chmod 0644 "$TARGET" || true
+
+        echo "NAS verified: $TARGET ($NAS_SIZE bytes)"
+      args:
+        executable: /bin/bash
+
+  rescue:
+    - name: Record NAS upload error
+      ansible.builtin.set_fact:
+        backup_upload_errors: >-
+          {{
+            backup_upload_errors
+            +
+            [
+              'NAS: '
+              ~ (
+                  ansible_failed_result.stderr
+                  | default(
+                      ansible_failed_result.msg
+                      | default('unknown error')
+                    )
+                )
+            ]
+          }}
+
+- name: Copy and verify backup on OneDrive
+  block:
+    - name: Upload backup to OneDrive
+      ansible.builtin.shell: |
+        set -euo pipefail
+
+        SOURCE="{{ backup_dir }}/{{ backup_file }}"
+        TARGET="{{ rclone_remote }}/{{ backup_file }}"
+
+        rclone copyto \
+          "$SOURCE" \
+          "$TARGET" \
+          --retries 3 \
+          --low-level-retries 10 \
+          --stats 30s \
+          --stats-one-line
+
+        LOCAL_SIZE="$(stat -c %s "$SOURCE")"
+
+        REMOTE_SIZE="$(
+          rclone lsl "$TARGET" |
+          awk 'NR == 1 {print $1}'
+        )"
+
+        test -n "$REMOTE_SIZE"
+        test "$LOCAL_SIZE" = "$REMOTE_SIZE"
+
+        echo "OneDrive verified: $TARGET ($REMOTE_SIZE bytes)"
+      args:
+        executable: /bin/bash
+
+  rescue:
+    - name: Record OneDrive upload error
+      ansible.builtin.set_fact:
+        backup_upload_errors: >-
+          {{
+            backup_upload_errors
+            +
+            [
+              'OneDrive: '
+              ~ (
+                  ansible_failed_result.stderr
+                  | default(
+                      ansible_failed_result.msg
+                      | default('unknown error')
+                    )
+                )
+            ]
+          }}
+
+- name: Fail when one or more backup copies failed
+  ansible.builtin.fail:
+    msg: "{{ backup_upload_errors | join('; ') }}"
+  when: backup_upload_errors | length > 0
