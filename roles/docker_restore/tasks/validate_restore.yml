@@ -1,0 +1,609 @@
+---
+- name: Verify restore validation dependencies
+  ansible.builtin.command:
+    argv:
+      - which
+      - "{{ item }}"
+  loop:
+    - python3
+    - tar
+    - gzip
+    - rclone
+    - docker
+    - cp
+    - df
+    - du
+  changed_when: false
+
+- name: Create temporary restore validation directory
+  ansible.builtin.tempfile:
+    state: directory
+    suffix: "_{{ service_name }}_restore_validate"
+  register: restore_validation_temp
+
+- name: Validate selected restore backup
+  block:
+    - name: Discover and select newest backup across all sources
+      ansible.builtin.shell: |
+        set -euo pipefail
+
+        python3 - <<'PY'
+        import json
+        import os
+        import re
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        service = os.environ["SERVICE_NAME"]
+        backup_dir = Path(os.environ["BACKUP_DIR"])
+        nas_dir = Path(os.environ["NAS_BACKUP_DIR"])
+        remote = os.environ["RCLONE_REMOTE"].rstrip("/")
+        requested_source = os.environ["REQUESTED_SOURCE"].strip()
+        requested_file = os.environ["REQUESTED_FILE"].strip()
+
+        pattern = re.compile(
+            rf"^{re.escape(service)}_backup_"
+            rf"([0-9][0-9][0-9][0-9]"
+            rf"[0-9][0-9][0-9][0-9]T"
+            rf"[0-9][0-9][0-9][0-9][0-9][0-9])"
+            rf"\.tar\.gz$"
+        )
+
+        priorities = {
+            "local": 3,
+            "nas": 2,
+            "onedrive": 1,
+        }
+
+        candidates = []
+        warnings = []
+        seen = set()
+
+        def add_candidate(source, value):
+            value = str(value)
+            name = Path(value).name
+            match = pattern.fullmatch(name)
+
+            if not match:
+                return
+
+            if source in {"local", "nas"}:
+                path = Path(value)
+
+                if not path.is_file():
+                    return
+
+                value = str(path.resolve())
+
+            key = (source, value)
+
+            if key in seen:
+                return
+
+            seen.add(key)
+
+            candidates.append({
+                "source": source,
+                "path": value,
+                "name": name,
+                "timestamp": match.group(1),
+                "priority": priorities[source],
+            })
+
+        def gather_local():
+            if backup_dir.is_dir():
+                for path in backup_dir.iterdir():
+                    if path.is_file():
+                        add_candidate("local", path)
+
+        def gather_nas():
+            nas_root = nas_dir.parent
+
+            if os.path.ismount(nas_root) and nas_dir.is_dir():
+                for path in nas_dir.iterdir():
+                    if path.is_file():
+                        add_candidate("nas", path)
+
+        def gather_onedrive():
+            result = subprocess.run(
+                [
+                    "rclone",
+                    "lsf",
+                    remote,
+                    "--files-only",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            if result.returncode != 0:
+                warnings.append(
+                    "OneDrive listing failed: "
+                    + result.stderr.strip()
+                )
+                return
+
+            for line in result.stdout.splitlines():
+                name = line.strip().rstrip("/")
+
+                if name:
+                    add_candidate(
+                        "onedrive",
+                        f"{remote}/{name}",
+                    )
+
+        gather_local()
+        gather_nas()
+        gather_onedrive()
+
+        if requested_file:
+            requested_name = Path(requested_file).name
+
+            # Also allow an explicit absolute local or NAS path.
+            if Path(requested_file).is_absolute():
+                inferred_source = (
+                    "nas"
+                    if str(requested_file).startswith(
+                        str(nas_dir.parent) + os.sep
+                    )
+                    else "local"
+                )
+
+                if requested_source in {"auto", inferred_source}:
+                    add_candidate(inferred_source, requested_file)
+
+            candidates = [
+                candidate
+                for candidate in candidates
+                if candidate["name"] == requested_name
+                and (
+                    requested_source == "auto"
+                    or candidate["source"] == requested_source
+                )
+            ]
+        elif requested_source != "auto":
+            candidates = [
+                candidate
+                for candidate in candidates
+                if candidate["source"] == requested_source
+            ]
+
+        if not candidates:
+            print(
+                "No matching backup was found",
+                file=sys.stderr,
+            )
+
+            for warning in warnings:
+                print(warning, file=sys.stderr)
+
+            sys.exit(2)
+
+        candidates.sort(
+            key=lambda candidate: (
+                candidate["timestamp"],
+                candidate["priority"],
+            ),
+            reverse=True,
+        )
+
+        selected = candidates[0]
+
+        print(json.dumps({
+            "selected": selected,
+            "candidate_count": len(candidates),
+            "warnings": warnings,
+        }))
+        PY
+      args:
+        executable: /bin/bash
+      environment:
+        SERVICE_NAME: "{{ service_name }}"
+        BACKUP_DIR: "{{ backup_dir }}"
+        NAS_BACKUP_DIR: "{{ nas_backup_dir }}"
+        RCLONE_REMOTE: "{{ rclone_remote }}"
+        REQUESTED_SOURCE: "{{ restore_source }}"
+        REQUESTED_FILE: "{{ restore_file }}"
+      register: restore_selection_raw
+      changed_when: false
+
+    - name: Store selected backup
+      ansible.builtin.set_fact:
+        restore_selection: "{{ restore_selection_raw.stdout | from_json }}"
+        restore_selected_source: >-
+          {{
+            (restore_selection_raw.stdout | from_json).selected.source
+          }}
+        restore_selected_name: >-
+          {{
+            (restore_selection_raw.stdout | from_json).selected.name
+          }}
+        restore_selected_path: >-
+          {{
+            (restore_selection_raw.stdout | from_json).selected.path
+          }}
+
+    - name: Display backup selection
+      ansible.builtin.debug:
+        msg:
+          source: "{{ restore_selected_source }}"
+          name: "{{ restore_selected_name }}"
+          source_path: "{{ restore_selected_path }}"
+          matching_candidates: "{{ restore_selection.candidate_count }}"
+          warnings: "{{ restore_selection.warnings }}"
+
+    - name: Set local validation backup path
+      ansible.builtin.set_fact:
+        final_backup_file: >-
+          {{
+            restore_selected_path
+            if restore_selected_source == "local"
+            else
+            restore_validation_temp.path ~
+            "/" ~ restore_selected_name
+          }}
+
+    - name: Copy selected NAS backup into validation directory
+      ansible.builtin.command:
+        argv:
+          - cp
+          - "--"
+          - "{{ restore_selected_path }}"
+          - "{{ final_backup_file }}"
+      when: restore_selected_source == "nas"
+
+    - name: Download selected OneDrive backup into validation directory
+      ansible.builtin.command:
+        argv:
+          - rclone
+          - copyto
+          - "{{ restore_selected_path }}"
+          - "{{ final_backup_file }}"
+          - --retries
+          - "{{ restore_download_retries | string }}"
+          - --low-level-retries
+          - "10"
+          - --stats
+          - "30s"
+          - --stats-one-line
+      timeout: "{{ restore_timeout }}"
+      when: restore_selected_source == "onedrive"
+
+    - name: Read selected backup metadata
+      ansible.builtin.stat:
+        path: "{{ final_backup_file }}"
+        checksum_algorithm: sha256
+      register: restore_backup_stat
+
+    - name: Require a non-empty backup file
+      ansible.builtin.assert:
+        that:
+          - restore_backup_stat.stat.exists
+          - restore_backup_stat.stat.isreg
+          - restore_backup_stat.stat.size | int > 0
+        fail_msg: "Selected backup is missing or empty."
+
+    - name: Verify gzip stream
+      ansible.builtin.command:
+        argv:
+          - gzip
+          - -t
+          - "{{ final_backup_file }}"
+      changed_when: false
+
+    - name: Inspect archive structure and safety
+      ansible.builtin.shell: |
+        set -euo pipefail
+
+        python3 - <<'PY'
+        import json
+        import os
+        import posixpath
+        import sys
+        import tarfile
+        from pathlib import PurePosixPath
+
+        archive = os.environ["BACKUP_FILE"]
+        service = os.environ["SERVICE_NAME"]
+        required = json.loads(os.environ["REQUIRED_ENTRIES"])
+
+        names = set()
+        volume_names = set()
+        symlink_paths = []
+        hardlink_targets = []
+        validation_warnings = []
+        total_file_bytes = 0
+        file_count = 0
+        errors = []
+
+        def normalize_name(raw_name):
+            name = raw_name
+
+            while name.startswith("./"):
+                name = name[2:]
+
+            name = posixpath.normpath(name)
+
+            if name == ".":
+                return ""
+
+            return name.rstrip("/")
+
+        with tarfile.open(archive, mode="r:gz") as tar:
+            members = tar.getmembers()
+
+            for member in members:
+                name = normalize_name(member.name)
+
+                if not name:
+                    continue
+
+                path = PurePosixPath(name)
+
+                if path.is_absolute() or ".." in path.parts:
+                    errors.append(
+                        f"Unsafe archive path: {member.name}"
+                    )
+                    continue
+
+                if path.parts[0] not in {service, "volumes"}:
+                    errors.append(
+                        f"Unexpected top-level entry: {member.name}"
+                    )
+
+                if member.ischr() or member.isblk() or member.isfifo():
+                    errors.append(
+                        f"Unsupported special file: {member.name}"
+                    )
+
+                if member.issym():
+                    target = member.linkname
+                    symlink_paths.append(name)
+
+                    if target.startswith("/"):
+                        validation_warnings.append(
+                            "Absolute symlink retained: "
+                            f"{member.name} -> {target}"
+                        )
+                    else:
+                        resolved = posixpath.normpath(
+                            posixpath.join(
+                                posixpath.dirname(name),
+                                target,
+                            )
+                        )
+
+                        if (
+                            resolved == ".."
+                            or resolved.startswith("../")
+                        ):
+                            errors.append(
+                                "Escaping symlink target: "
+                                f"{member.name} -> {target}"
+                            )
+
+                if member.islnk():
+                    target = normalize_name(member.linkname)
+                    hardlink_targets.append((name, target))
+
+                    if (
+                        member.linkname.startswith("/")
+                        or not target
+                        or ".." in PurePosixPath(target).parts
+                    ):
+                        errors.append(
+                            "Unsafe hard-link target: "
+                            f"{member.name} -> {member.linkname}"
+                        )
+
+                names.add(name)
+
+                if member.isfile():
+                    total_file_bytes += member.size
+                    file_count += 1
+
+                if (
+                    len(path.parts) >= 2
+                    and path.parts[0] == "volumes"
+                ):
+                    volume_names.add(path.parts[1])
+
+        # An archive must never place another member below a symlink.
+        # Otherwise extraction could potentially traverse that link.
+        for symlink_name in symlink_paths:
+            nested_members = sorted(
+                archive_name
+                for archive_name in names
+                if archive_name.startswith(symlink_name + "/")
+            )
+
+            if nested_members:
+                errors.append(
+                    "Archive contains members below symlink "
+                    f"{symlink_name}: {nested_members[0]}"
+                )
+
+        for hardlink_name, hardlink_target in hardlink_targets:
+            if hardlink_target not in names:
+                errors.append(
+                    "Hard-link target is not contained in archive: "
+                    f"{hardlink_name} -> {hardlink_target}"
+                )
+
+            if any(
+                hardlink_target == symlink_name
+                or hardlink_target.startswith(symlink_name + "/")
+                for symlink_name in symlink_paths
+            ):
+                errors.append(
+                    "Hard-link target traverses archive symlink: "
+                    f"{hardlink_name} -> {hardlink_target}"
+                )
+
+        compose_path = f"{service}/docker-compose.yml"
+
+        if compose_path not in names:
+            errors.append(
+                f"Required compose file missing: {compose_path}"
+            )
+
+        missing_required = []
+
+        for required_entry in required:
+            required_entry = required_entry.strip()
+            required_name = required_entry.rstrip("/")
+
+            if required_entry.endswith("/"):
+                present = any(
+                    name == required_name
+                    or name.startswith(required_name + "/")
+                    for name in names
+                )
+            else:
+                present = required_name in names
+
+            if not present:
+                missing_required.append(required_entry)
+
+        if missing_required:
+            errors.append(
+                "Missing required entries: "
+                + ", ".join(missing_required)
+            )
+
+        if errors:
+            for error in errors:
+                print(error, file=sys.stderr)
+
+            sys.exit(3)
+
+        print(json.dumps({
+            "format": (
+                "service-and-volumes"
+                if volume_names
+                else "service-only"
+            ),
+            "member_count": len(names),
+            "file_count": file_count,
+            "total_file_bytes": total_file_bytes,
+            "volume_names": sorted(volume_names),
+            "required_entries": required,
+            "symlinks": sorted(symlink_paths),
+            "warnings": validation_warnings,
+        }))
+        PY
+      args:
+        executable: /bin/bash
+      environment:
+        BACKUP_FILE: "{{ final_backup_file }}"
+        SERVICE_NAME: "{{ service_name }}"
+        REQUIRED_ENTRIES: "{{ restore_required_entries | to_json }}"
+      register: restore_manifest_raw
+      changed_when: false
+
+    - name: Store archive manifest
+      ansible.builtin.set_fact:
+        restore_manifest: "{{ restore_manifest_raw.stdout | from_json }}"
+
+    - name: Determine free validation space
+      ansible.builtin.shell: |
+        set -euo pipefail
+        df -PB1 "{{ restore_validation_temp.path }}" |
+          awk 'NR == 2 {print $4}'
+      args:
+        executable: /bin/bash
+      register: restore_free_bytes
+      changed_when: false
+
+    - name: Require sufficient extraction space
+      ansible.builtin.assert:
+        that:
+          - >-
+            restore_free_bytes.stdout | int >=
+            (
+              restore_manifest.total_file_bytes | int
+              +
+              restore_min_free_margin_mb | int * 1048576
+            )
+        fail_msg: >-
+          Insufficient free space for safe validation extraction.
+
+    - name: Create validation extraction directory
+      ansible.builtin.file:
+        path: "{{ restore_validation_temp.path }}/extracted"
+        state: directory
+        mode: "0700"
+
+    - name: Extract archive into isolated validation directory
+      ansible.builtin.command:
+        argv:
+          - tar
+          - --extract
+          - --gzip
+          - --file
+          - "{{ final_backup_file }}"
+          - --directory
+          - "{{ restore_validation_temp.path }}/extracted"
+          - --no-same-owner
+          - --no-same-permissions
+      changed_when: true
+
+    - name: Validate restored Docker Compose configuration
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - --project-directory
+          - "{{ restore_validation_temp.path }}/extracted/{{ service_name }}"
+          - -f
+          - "{{ restore_validation_temp.path }}/extracted/{{ service_name }}/docker-compose.yml"
+          - config
+          - --quiet
+      changed_when: false
+
+    - name: Measure extracted validation data
+      ansible.builtin.command:
+        argv:
+          - du
+          - -sb
+          - "{{ restore_validation_temp.path }}/extracted"
+      register: restore_extracted_size
+      changed_when: false
+
+    - name: Store successful validation result
+      ansible.builtin.set_fact:
+        restore_validation_summary:
+          source: "{{ restore_selected_source }}"
+          backup: "{{ restore_selected_name }}"
+          source_path: "{{ restore_selected_path }}"
+          sha256: "{{ restore_backup_stat.stat.checksum }}"
+          compressed_bytes: "{{ restore_backup_stat.stat.size | int }}"
+          unpacked_file_bytes: >-
+            {{ restore_manifest.total_file_bytes | int }}
+          extracted_disk_bytes: >-
+            {{ restore_extracted_size.stdout.split()[0] | int }}
+          archive_members: "{{ restore_manifest.member_count | int }}"
+          archive_files: "{{ restore_manifest.file_count | int }}"
+          archive_format: "{{ restore_manifest.format }}"
+          volumes: "{{ restore_manifest.volume_names }}"
+          required_entries: "{{ restore_manifest.required_entries }}"
+          archive_symlinks: "{{ restore_manifest.symlinks }}"
+          validation_warnings: "{{ restore_manifest.warnings }}"
+          compose_validation: "passed"
+          temporary_data_retained: >-
+            {{ restore_keep_validation_data | bool }}
+          temporary_path: >-
+            {{
+              restore_validation_temp.path
+              if restore_keep_validation_data | bool
+              else "removed after validation"
+            }}
+
+  always:
+    - name: Remove isolated validation data
+      ansible.builtin.file:
+        path: "{{ restore_validation_temp.path }}"
+        state: absent
+      when: not (restore_keep_validation_data | bool)

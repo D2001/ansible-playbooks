@@ -1,14 +1,11 @@
 ---
-# Main tasks for Docker container restore
+- name: Reject restore modes that are not hardened yet
+  ansible.builtin.fail:
+    msg: >-
+      restore_mode={{ restore_mode }} is disabled. Only the non-destructive
+      restore_mode=validate is currently implemented.
+  when: restore_mode != "validate"
 
-- name: Prepare restore environment
-  include_tasks: find_backup.yml
-  vars:
-    service_name: "{{ service_name }}"
-    backup_base_dir: "{{ backup_base_dir }}"
-
-- name: Prepare restore environment
-  include_tasks: prepare_restore.yml
-
-- name: Restore data
-  include_tasks: restore_data.yml
+- name: Validate restore backup without modifying production data
+  ansible.builtin.import_tasks: validate_restore.yml
+  when: restore_mode == "validate"

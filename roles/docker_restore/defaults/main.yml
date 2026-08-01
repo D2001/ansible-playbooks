@@ -1,10 +1,38 @@
 ---
-# Default variables for Docker restore operations
-service_name: temp_service  # Override with -e "service_name=paperless"
+service_name: "temp_service"
 service_dir: "{{ base_dir }}/{{ service_name }}"
 compose_file: "{{ service_dir }}/docker-compose.yml"
 
-# Restore timeout and retry settings
-restore_timeout: 300
-health_check_retries: 30
-health_check_delay: 10
+restore_mode: "validate"
+restore_source: "auto"
+restore_file: ""
+
+restore_timeout: 1800
+restore_download_retries: 3
+restore_min_free_margin_mb: 1024
+restore_keep_validation_data: false
+
+restore_required_entries_map:
+  paperless:
+    - "paperless/docker-compose.yml"
+    - "volumes/paperless_paperless_data/"
+    - "volumes/paperless_paperless_media/"
+    - "volumes/paperless_paperless_pgdata/PG_VERSION"
+    - "volumes/paperless_paperless_redis/"
+
+  homeassistant:
+    - "homeassistant/docker-compose.yml"
+    - "homeassistant/hass-config/.storage/auth"
+    - "homeassistant/mosquitto/data/mosquitto.db"
+    - "homeassistant/nodered/"
+
+  xmltv:
+    - "xmltv/docker-compose.yml"
+
+restore_required_entries: >-
+  {{
+    restore_required_entries_map.get(
+      service_name,
+      [service_name ~ '/docker-compose.yml']
+    )
+  }}

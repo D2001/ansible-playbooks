@@ -6,11 +6,22 @@
 # Set environment for cron execution
 export HOME="/home/karsten"
 export PATH="/usr/local/bin:/usr/bin:/bin:/home/karsten/.local/bin"
-export ANSIBLE_CONFIG="/home/karsten/ansible-playbooks/ansible.cfg"
 
-# Ensure we're in the right directory
-cd "/home/karsten/ansible-playbooks" || {
-    echo "ERROR: Cannot change to ansible-playbooks directory" >&2
+SCRIPT_DIR="$(
+    cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &&
+    pwd
+)"
+
+REPO_DIR="$(
+    cd -- "$SCRIPT_DIR/.." &&
+    pwd
+)"
+
+export ANSIBLE_CONFIG="$REPO_DIR/ansible.cfg"
+
+# Always operate in the checkout containing this wrapper.
+cd "$REPO_DIR" || {
+    echo "ERROR: Cannot change to repository directory: $REPO_DIR" >&2
     exit 1
 }
 # ---------- USER SETTINGS ----------

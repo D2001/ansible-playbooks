@@ -1,187 +1,63 @@
 ---
-- name: Restore Docker service from latest available backup (local, NAS, or OneDrive)
+- name: Validate Docker service restore backup
   hosts: localhost
-
-  vars_prompt:
-    - name: confirm_restore
-      prompt: |
-        WARNING: This will DELETE your existing service directory and replace it with the latest backup.
-        Type YES to proceed:
-      private: no
-
-  pre_tasks:
-    - name: Abort if not confirmed
-      fail:
-        msg: "Restore cancelled."
-      when: confirm_restore != "YES"
-
-    - name: Validate required service_name parameter
-      fail:
-        msg: "service_name must be specified with -e service_name=<service_name>"
-      when: service_name is not defined or service_name == "temp_service"
+  gather_facts: true
 
   vars:
     base_dir: "/home/karsten"
     backup_base_dir: "{{ base_dir }}/backups"
-    service_name: temp_service   # Override with -e "service_name=paperless"
+
+    service_name: "temp_service"
     service_dir: "{{ base_dir }}/{{ service_name }}"
-    backup_dir: "{{ base_dir }}/backups/{{ service_name }}_backups"
+    backup_dir: "{{ backup_base_dir }}/{{ service_name }}_backups"
+
     nas_backup_dir: "/mnt/backups/{{ service_name }}"
     rclone_remote: "onedrive:backups/{{ service_name }}_backups"
     backup_pattern: "{{ service_name }}_backup_*.tar.gz"
-    compose_file: "{{ service_dir }}/docker-compose.yml"
-    # Restore timeout setting
-    restore_timeout: 300
+
+    # Only the non-destructive mode is currently enabled.
+    restore_mode: "validate"
+
+    # auto, local, nas or onedrive
+    restore_source: "auto"
+
+    # Optional explicit filename or local/NAS path.
+    restore_file: ""
+
+  pre_tasks:
+    - name: Validate restore request
+      ansible.builtin.assert:
+        that:
+          - service_name != "temp_service"
+          - >-
+            (service_name |
+            regex_search('^[A-Za-z0-9][A-Za-z0-9_.-]*$')) is not none
+          - restore_mode == "validate"
+          - restore_source in ["auto", "local", "nas", "onedrive"]
+        fail_msg: >-
+          A valid service_name is required. Only restore_mode=validate is
+          enabled while restore hardening is under development.
 
   tasks:
-    # Pre-flight checks and setup
-    - name: Ensure required commands are available
-      command: which {{ item }}
-      loop:
-        - docker
-        - tar
-        - rclone
-        - rsync
-      register: command_check
-      failed_when: command_check.rc != 0
-      changed_when: false
+    - name: Run non-destructive restore validation
+      ansible.builtin.import_role:
+        name: docker_restore
 
-    - name: Ensure backup directory exists
-      file:
-        path: "{{ backup_dir }}"
-        state: directory
-        owner: karsten
-        group: karsten
-        mode: '0755'
-
-    # Use block with rescue for proper error handling and cleanup
-    - block:
-        - name: Check if service directory exists
-          stat:
-            path: "{{ compose_file }}"
-          register: service_compose
-
-        - name: Stop {{ service_name }} containers gracefully
-          shell: |
-            if [ -f "{{ compose_file }}" ]; then
-              echo "Stopping {{ service_name }} containers..."
-              timeout {{ restore_timeout }} docker compose down --timeout 30 || {
-                echo "Graceful shutdown failed, forcing stop..."
-                docker compose kill || true
-                docker compose rm -f || true
-                # Clean up any remaining container files that might have root ownership
-                if [ -d "{{ service_dir }}" ]; then
-                  sudo find "{{ service_dir }}" -type f -exec sudo rm -f {} + 2>/dev/null || true
-                fi
-              }
-              echo "Containers stopped"
-            fi
-          args:
-            chdir: "{{ service_dir }}"
-          register: stop_result
-          failed_when: false
-          when: service_compose.stat.exists
-
-        # Use role for restore process
-        - name: Restore Docker service
-          include_role:
-            name: docker_restore
-
-        # --- Start services with health checks ---
-        - name: Start {{ service_name }} containers
-          shell: |
-            set -e
-            echo "Starting {{ service_name }} containers..."
-            docker compose up -d
-            echo "Containers started"
-          args:
-            chdir: "{{ service_dir }}"
-            executable: /bin/bash
-          register: start_result
-
-        - name: Wait for containers to start
-          shell: |
-            echo "Waiting for containers to start..."
-            sleep 10
-            
-            # Check if containers are running
-            if docker compose ps | grep -q "Up"; then
-              echo "✓ Containers are running"
-              docker compose ps
-            else
-              echo "⚠ Warning: Some containers may not be running"
-              docker compose ps
-              echo "Recent logs:"
-              docker compose logs --tail 10
-            fi
-          args:
-            chdir: "{{ service_dir }}"
-            executable: /bin/bash
-          register: health_check_result
-          failed_when: false
-
-      rescue:
-        - name: Log restore failure details
-          debug:
-            msg: |
-              Restore failed with error: {{ ansible_failed_result.msg | default('Unknown error') }}
-              Task that failed: {{ ansible_failed_task.name | default('Unknown task') }}
-
-        - name: Attempt to restore from emergency backup if available
-          shell: |
-            EMERGENCY_BACKUP=$(ls -1t "{{ backup_dir }}"/emergency_backup_{{ service_name }}_*.tar.gz 2>/dev/null | head -n1 || echo "")
-            if [ -n "$EMERGENCY_BACKUP" ] && [ -f "$EMERGENCY_BACKUP" ]; then
-              echo "Attempting to restore from emergency backup: $EMERGENCY_BACKUP"
-              # Use sudo to handle Docker-created files with root ownership
-              sudo rm -rf "{{ service_dir }}"
-              mkdir -p "{{ service_dir }}"
-              tar xzf "$EMERGENCY_BACKUP" -C "{{ base_dir }}"
-              sudo chown -R karsten:karsten "{{ service_dir }}"
-              echo "Emergency restore completed"
-            else
-              echo "No emergency backup available"
-            fi
-          args:
-            executable: /bin/bash
-          register: emergency_restore
-          failed_when: false
-
-        - name: Clean up on failure
-          file:
-            path: "{{ temp_restore_dir.path }}"
-            state: absent
-          when: temp_restore_dir is defined and temp_restore_dir.path is defined
-
-        - name: Fail with detailed error message
-          fail:
-            msg: |
-              Restore operation failed. Please check the following:
-              1. Backup file integrity: {{ final_backup_file | default('N/A') }}
-              2. Available disk space in {{ service_dir }}
-              3. Docker service status
-              4. Container logs for more details
-              
-              Emergency restore status: {{ emergency_restore.stdout | default('Not attempted') }}
-
-      always:
-        - name: Clean up temporary directory
-          file:
-            path: "{{ temp_restore_dir.path }}"
-            state: absent
-          when: temp_restore_dir is defined and temp_restore_dir.path is defined
-
-    - name: Display restore completion summary
-      debug:
-        msg: |
-          ✅ Restore completed successfully!
-          
-          Service: {{ service_name }}
-          Source: {{ restore_source }}
-          Backup file: {{ final_backup_file }}
-          Service directory: {{ service_dir }}
-          Volumes restored: {{ volume_restore_results.results | length | default(0) }}
-          
-          Next steps:
-          1. Verify service functionality
-          2. Check container logs if needed: docker compose logs -f
-          3. Remove emergency backup if restore is confirmed working
+  post_tasks:
+    - name: Display restore validation summary
+      ansible.builtin.debug:
+        msg:
+          mode: "{{ restore_mode }}"
+          service: "{{ service_name }}"
+          selected_source: "{{ restore_validation_summary.source }}"
+          selected_backup: "{{ restore_validation_summary.backup }}"
+          compressed_bytes: "{{ restore_validation_summary.compressed_bytes }}"
+          unpacked_file_bytes: >-
+            {{ restore_validation_summary.unpacked_file_bytes }}
+          archive_members: "{{ restore_validation_summary.archive_members }}"
+          volumes: "{{ restore_validation_summary.volumes }}"
+          compose_validation: >-
+            {{ restore_validation_summary.compose_validation }}
+          temporary_data_retained: >-
+            {{ restore_validation_summary.temporary_data_retained }}
+          temporary_path: "{{ restore_validation_summary.temporary_path }}"
