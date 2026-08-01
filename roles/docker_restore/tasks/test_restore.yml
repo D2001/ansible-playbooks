@@ -1,0 +1,652 @@
+---
+- name: Restrict isolated restore test to Paperless
+  ansible.builtin.assert:
+    that:
+      - service_name == "paperless"
+    fail_msg: >-
+      The isolated restore test currently supports only service_name=paperless.
+
+- name: Perform isolated Paperless PostgreSQL restore test
+  block:
+    - name: Retain validated files until isolated test cleanup
+      ansible.builtin.set_fact:
+        restore_keep_validation_data: true
+
+    - name: Select and fully validate backup before test restore
+      ansible.builtin.import_tasks: validate_restore.yml
+
+    - name: Generate isolated Docker object identifier
+      ansible.builtin.set_fact:
+        restore_test_id: >-
+          {{ (restore_validation_temp.path | hash('sha1'))[0:12] }}
+
+    - name: Define isolated Docker object names
+      ansible.builtin.set_fact:
+        restore_test_volume_name: >-
+          paperless_restore_test_pgdata_{{ restore_test_id }}
+        restore_test_container_name: >-
+          paperless-restore-test-db-{{ restore_test_id }}
+
+    - name: Read production PostgreSQL runtime configuration safely
+      ansible.builtin.shell: |
+        set -euo pipefail
+
+        python3 - "{{ restore_test_paperless_db_container }}" <<'PY'
+        import json
+        import os
+        import subprocess
+        import sys
+
+        container_name = sys.argv[1]
+
+        result = subprocess.run(
+            ["docker", "inspect", container_name],
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+
+        container = json.loads(result.stdout)[0]
+        config = container.get("Config") or {}
+
+        environment = {}
+
+        for entry in config.get("Env") or []:
+            if "=" in entry:
+                key, value = entry.split("=", 1)
+                environment[key] = value
+
+        required = [
+            "POSTGRES_USER",
+            "POSTGRES_DB",
+            "POSTGRES_PASSWORD",
+            "PG_MAJOR",
+        ]
+
+        missing = [
+            key
+            for key in required
+            if key not in environment
+        ]
+
+        if missing:
+            raise SystemExit(
+                "Missing PostgreSQL environment keys: "
+                + ", ".join(missing)
+            )
+
+        pgdata = environment.get(
+            "PGDATA",
+            "/var/lib/postgresql/data",
+        )
+
+        matching_mounts = []
+
+        for mount in container.get("Mounts") or []:
+            destination = (
+                mount.get("Destination") or ""
+            ).rstrip("/")
+
+            if (
+                mount.get("Type") == "volume"
+                and (
+                    pgdata == destination
+                    or pgdata.startswith(destination + "/")
+                )
+            ):
+                matching_mounts.append(mount)
+
+        if len(matching_mounts) != 1:
+            raise SystemExit(
+                "Could not identify exactly one PostgreSQL "
+                "data volume mount"
+            )
+
+        mount = matching_mounts[0]
+        mount_target = (
+            mount.get("Destination") or ""
+        ).rstrip("/") or "/"
+
+        normalized_pgdata = os.path.normpath(pgdata)
+        normalized_mount = os.path.normpath(mount_target)
+
+        pgdata_relative = os.path.relpath(
+            normalized_pgdata,
+            normalized_mount,
+        )
+
+        if pgdata_relative == ".":
+            pgdata_relative = ""
+
+        if (
+            pgdata_relative == ".."
+            or pgdata_relative.startswith("../")
+        ):
+            raise SystemExit(
+                "PGDATA is outside the PostgreSQL volume mount"
+            )
+
+        print(json.dumps({
+            "image": config.get("Image"),
+            "postgres_user": environment["POSTGRES_USER"],
+            "postgres_db": environment["POSTGRES_DB"],
+            "postgres_password": environment[
+                "POSTGRES_PASSWORD"
+            ],
+            "pg_major": environment["PG_MAJOR"],
+            "pgdata": normalized_pgdata,
+            "mount_target": normalized_mount,
+            "pgdata_relative": pgdata_relative,
+            "production_volume": mount.get("Name"),
+        }))
+        PY
+      args:
+        executable: /bin/bash
+      register: restore_test_db_config_raw
+      changed_when: false
+      no_log: true
+
+    - name: Store production PostgreSQL configuration
+      ansible.builtin.set_fact:
+        restore_test_db_config: >-
+          {{ restore_test_db_config_raw.stdout | from_json }}
+      no_log: true
+
+    - name: Read PostgreSQL metadata from archive
+      ansible.builtin.shell: |
+        set -euo pipefail
+
+        python3 - "{{ final_backup_file }}" <<'PY'
+        import json
+        import sys
+        import tarfile
+
+        archive = sys.argv[1]
+        root_name = (
+            "volumes/paperless_paperless_pgdata"
+        )
+        version_name = root_name + "/PG_VERSION"
+
+        root_member = None
+        version_member = None
+
+        with tarfile.open(archive, mode="r:gz") as tar:
+            for member in tar.getmembers():
+                normalized = member.name.rstrip("/")
+
+                if normalized == root_name:
+                    root_member = member
+
+                if normalized == version_name:
+                    version_member = member
+
+            if root_member is None:
+                raise SystemExit(
+                    "Paperless PostgreSQL volume root is missing"
+                )
+
+            if version_member is None:
+                raise SystemExit(
+                    "Paperless PostgreSQL PG_VERSION is missing"
+                )
+
+            version_file = tar.extractfile(version_member)
+
+            if version_file is None:
+                raise SystemExit(
+                    "Could not read PostgreSQL PG_VERSION"
+                )
+
+            pg_version = (
+                version_file.read()
+                .decode("ascii")
+                .strip()
+            )
+
+        print(json.dumps({
+            "uid": root_member.uid,
+            "gid": root_member.gid,
+            "mode": format(root_member.mode, "04o"),
+            "pg_version": pg_version,
+        }))
+        PY
+      args:
+        executable: /bin/bash
+      register: restore_test_archive_db_raw
+      changed_when: false
+
+    - name: Store archive PostgreSQL metadata
+      ansible.builtin.set_fact:
+        restore_test_archive_db: >-
+          {{ restore_test_archive_db_raw.stdout | from_json }}
+
+    - name: Validate PostgreSQL test compatibility
+      ansible.builtin.assert:
+        that:
+          - restore_test_db_config.image | length > 0
+          - restore_test_db_config.mount_target | length > 0
+          - restore_test_db_config.pgdata | length > 0
+          - >-
+            restore_test_archive_db.pg_version | string ==
+            restore_test_db_config.pg_major | string
+          - >-
+            restore_test_db_config.pgdata ==
+            restore_test_db_config.mount_target
+            or
+            restore_test_db_config.pgdata.startswith(
+              restore_test_db_config.mount_target.rstrip('/') ~ '/'
+            )
+          - >-
+            restore_test_db_config.pgdata_relative == ""
+            or
+            (
+              restore_test_db_config.pgdata_relative |
+              regex_search(
+                '^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$'
+              )
+            ) is not none
+        fail_msg: >-
+          The backup PostgreSQL version or PGDATA layout is incompatible with
+          the currently running Paperless PostgreSQL image.
+
+    - name: Verify isolated container name is unused
+      ansible.builtin.command:
+        argv:
+          - docker
+          - container
+          - inspect
+          - "{{ restore_test_container_name }}"
+      register: restore_test_existing_container
+      changed_when: false
+      failed_when: false
+
+    - name: Verify isolated volume name is unused
+      ansible.builtin.command:
+        argv:
+          - docker
+          - volume
+          - inspect
+          - "{{ restore_test_volume_name }}"
+      register: restore_test_existing_volume
+      changed_when: false
+      failed_when: false
+
+    - name: Require unused isolated Docker object names
+      ansible.builtin.assert:
+        that:
+          - restore_test_existing_container.rc != 0
+          - restore_test_existing_volume.rc != 0
+        fail_msg: >-
+          A generated restore-test container or volume name already exists.
+
+    - name: Create isolated PostgreSQL test volume
+      ansible.builtin.command:
+        argv:
+          - docker
+          - volume
+          - create
+          - --label
+          - "restore.test=true"
+          - --label
+          - "restore.test.service=paperless"
+          - --label
+          - "restore.test.backup={{ restore_selected_name }}"
+          - "{{ restore_test_volume_name }}"
+      register: restore_test_volume_create
+      changed_when: true
+
+    - name: Populate isolated PostgreSQL volume preserving ownership and modes
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - --pull
+          - never
+          - --network
+          - none
+          - --label
+          - "restore.test=true"
+          - --entrypoint
+          - /bin/sh
+          - --mount
+          - "type=bind,src={{ final_backup_file }},dst=/backup.tar.gz,readonly"
+          - --mount
+          - "type=volume,src={{ restore_test_volume_name }},dst=/restore"
+          - --env
+          - >-
+            RESTORE_PGDATA_RELATIVE={{
+              restore_test_db_config.pgdata_relative
+            }}
+          - "{{ restore_test_db_config.image }}"
+          - -ec
+          - |
+            destination="/restore"
+
+            if [ -n "$RESTORE_PGDATA_RELATIVE" ]; then
+              destination="$destination/$RESTORE_PGDATA_RELATIVE"
+            fi
+
+            mkdir -p "$destination"
+
+            tar \
+              --extract \
+              --gzip \
+              --numeric-owner \
+              --same-owner \
+              --same-permissions \
+              --file /backup.tar.gz \
+              --directory "$destination" \
+              --strip-components=2 \
+              volumes/paperless_paperless_pgdata
+
+            chown \
+              {{ restore_test_archive_db.uid }}:{{ restore_test_archive_db.gid }} \
+              "$destination"
+
+            chmod \
+              {{ restore_test_archive_db.mode }} \
+              "$destination"
+
+            test \
+              "$(cat "$destination/PG_VERSION")" = \
+              "{{ restore_test_archive_db.pg_version }}"
+      changed_when: true
+
+    - name: Start isolated PostgreSQL test container
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --detach
+          - --pull
+          - never
+          - --name
+          - "{{ restore_test_container_name }}"
+          - --network
+          - none
+          - --label
+          - "restore.test=true"
+          - --label
+          - "restore.test.service=paperless"
+          - --label
+          - "restore.test.backup={{ restore_selected_name }}"
+          - --mount
+          - "type=volume,src={{ restore_test_volume_name }},dst={{ restore_test_db_config.mount_target }}"
+          - --env
+          - "POSTGRES_USER={{ restore_test_db_config.postgres_user }}"
+          - --env
+          - "POSTGRES_DB={{ restore_test_db_config.postgres_db }}"
+          - --env
+          - >-
+            POSTGRES_PASSWORD={{
+              restore_test_db_config.postgres_password
+            }}
+          - --env
+          - "PGDATA={{ restore_test_db_config.pgdata }}"
+          - "{{ restore_test_db_config.image }}"
+      register: restore_test_container_start
+      changed_when: true
+      no_log: true
+
+    - name: Wait for isolated PostgreSQL readiness
+      ansible.builtin.command:
+        argv:
+          - docker
+          - exec
+          - "{{ restore_test_container_name }}"
+          - pg_isready
+          - -U
+          - "{{ restore_test_db_config.postgres_user }}"
+          - -d
+          - "{{ restore_test_db_config.postgres_db }}"
+      register: restore_test_pg_ready
+      retries: "{{ restore_test_start_retries }}"
+      delay: "{{ restore_test_start_delay }}"
+      until: restore_test_pg_ready.rc == 0
+      changed_when: false
+
+    - name: Run isolated PostgreSQL identity and schema checks
+      ansible.builtin.command:
+        argv:
+          - docker
+          - exec
+          - --env
+          - >-
+            PGPASSWORD={{ restore_test_db_config.postgres_password }}
+          - "{{ restore_test_container_name }}"
+          - psql
+          - --no-psqlrc
+          - --username
+          - "{{ restore_test_db_config.postgres_user }}"
+          - --dbname
+          - "{{ restore_test_db_config.postgres_db }}"
+          - --tuples-only
+          - --no-align
+          - --field-separator
+          - "|"
+          - --command
+          - >-
+            SELECT
+              current_database(),
+              current_setting('server_version_num'),
+              NOT pg_is_in_recovery(),
+              to_regclass('public.documents_document') IS NOT NULL,
+              to_regclass('public.django_migrations') IS NOT NULL;
+      register: restore_test_db_identity
+      changed_when: false
+      no_log: true
+
+    - name: Store PostgreSQL identity result
+      ansible.builtin.set_fact:
+        restore_test_db_identity_fields: >-
+          {{ restore_test_db_identity.stdout.strip().split('|') }}
+
+    - name: Require valid Paperless database structure
+      ansible.builtin.assert:
+        that:
+          - restore_test_db_identity_fields | length == 5
+          - >-
+            restore_test_db_identity_fields[0] ==
+            restore_test_db_config.postgres_db
+          - restore_test_db_identity_fields[2] == "t"
+          - restore_test_db_identity_fields[3] == "t"
+          - restore_test_db_identity_fields[4] == "t"
+        fail_msg: >-
+          The restored PostgreSQL cluster started, but expected Paperless
+          database structures were not found.
+
+    - name: Count restored Paperless documents
+      ansible.builtin.command:
+        argv:
+          - docker
+          - exec
+          - --env
+          - >-
+            PGPASSWORD={{ restore_test_db_config.postgres_password }}
+          - "{{ restore_test_container_name }}"
+          - psql
+          - --no-psqlrc
+          - --username
+          - "{{ restore_test_db_config.postgres_user }}"
+          - --dbname
+          - "{{ restore_test_db_config.postgres_db }}"
+          - --tuples-only
+          - --no-align
+          - --command
+          - "SELECT count(*) FROM public.documents_document;"
+      register: restore_test_document_count
+      changed_when: false
+      no_log: true
+
+    - name: Count restored Django migrations
+      ansible.builtin.command:
+        argv:
+          - docker
+          - exec
+          - --env
+          - >-
+            PGPASSWORD={{ restore_test_db_config.postgres_password }}
+          - "{{ restore_test_container_name }}"
+          - psql
+          - --no-psqlrc
+          - --username
+          - "{{ restore_test_db_config.postgres_user }}"
+          - --dbname
+          - "{{ restore_test_db_config.postgres_db }}"
+          - --tuples-only
+          - --no-align
+          - --command
+          - "SELECT count(*) FROM public.django_migrations;"
+      register: restore_test_migration_count
+      changed_when: false
+      no_log: true
+
+    - name: Read restored database collation versions
+      ansible.builtin.command:
+        argv:
+          - docker
+          - exec
+          - --env
+          - >-
+            PGPASSWORD={{ restore_test_db_config.postgres_password }}
+          - "{{ restore_test_container_name }}"
+          - psql
+          - --no-psqlrc
+          - --username
+          - "{{ restore_test_db_config.postgres_user }}"
+          - --dbname
+          - "{{ restore_test_db_config.postgres_db }}"
+          - --tuples-only
+          - --no-align
+          - --field-separator
+          - "|"
+          - --command
+          - >-
+            SELECT
+              COALESCE(datcollversion, '<none>'),
+              COALESCE(
+                pg_database_collation_actual_version(oid),
+                '<none>'
+              ),
+              datcollversion IS NOT DISTINCT FROM
+                pg_database_collation_actual_version(oid)
+            FROM pg_database
+            WHERE datname = current_database();
+      register: restore_test_collation_raw
+      changed_when: false
+      no_log: true
+
+    - name: Store restored database collation result
+      ansible.builtin.set_fact:
+        restore_test_collation_fields: >-
+          {{ restore_test_collation_raw.stdout.strip().split('|') }}
+
+    - name: Require readable database collation result
+      ansible.builtin.assert:
+        that:
+          - restore_test_collation_fields | length == 3
+          - restore_test_collation_fields[2] in ["t", "f"]
+        fail_msg: >-
+          The restored database collation versions could not be determined.
+
+    - name: Display database collation mismatch warning
+      ansible.builtin.debug:
+        msg: >-
+          WARNING: The restored database recorded collation version
+          {{ restore_test_collation_fields[0] }}, while the current
+          PostgreSQL image provides
+          {{ restore_test_collation_fields[1] }}. Do not refresh the
+          recorded version until affected collation-dependent objects
+          have been reviewed and rebuilt.
+      when: restore_test_collation_fields[2] != "t"
+
+    - name: Store successful isolated restore test result
+      ansible.builtin.set_fact:
+        restore_test_summary:
+          source: "{{ restore_selected_source }}"
+          backup: "{{ restore_selected_name }}"
+          database_image: "{{ restore_test_db_config.image }}"
+          postgres_major: "{{ restore_test_archive_db.pg_version }}"
+          readiness: "passed"
+          sql_validation: "passed"
+          document_count: "{{ restore_test_document_count.stdout | trim }}"
+          migration_count: "{{ restore_test_migration_count.stdout | trim }}"
+          collation_recorded: "{{ restore_test_collation_fields[0] }}"
+          collation_actual: "{{ restore_test_collation_fields[1] }}"
+          collation_status: >-
+            {{
+              "ok"
+              if restore_test_collation_fields[2] == "t"
+              else "warning"
+            }}
+          cleanup: "pending"
+
+  rescue:
+    - name: Capture isolated PostgreSQL logs after test failure
+      ansible.builtin.command:
+        argv:
+          - docker
+          - logs
+          - --tail
+          - "200"
+          - "{{ restore_test_container_name }}"
+      register: restore_test_failure_logs
+      changed_when: false
+      failed_when: false
+      when: restore_test_container_name is defined
+
+    - name: Display isolated PostgreSQL failure logs
+      ansible.builtin.debug:
+        var: restore_test_failure_logs.stdout_lines
+      when:
+        - restore_test_failure_logs is defined
+        - restore_test_failure_logs.stdout_lines is defined
+
+    - name: Fail isolated Paperless restore test
+      ansible.builtin.fail:
+        msg: >-
+          The isolated Paperless restore test failed. Production containers,
+          networks and volumes were not modified.
+
+  always:
+    - name: Remove isolated PostgreSQL test container
+      ansible.builtin.command:
+        argv:
+          - docker
+          - container
+          - rm
+          - --force
+          - "{{ restore_test_container_name }}"
+      register: restore_test_container_cleanup
+      changed_when: restore_test_container_cleanup.rc == 0
+      failed_when: false
+      when: restore_test_container_name is defined
+
+    - name: Remove isolated PostgreSQL test volume
+      ansible.builtin.command:
+        argv:
+          - docker
+          - volume
+          - rm
+          - --force
+          - "{{ restore_test_volume_name }}"
+      register: restore_test_volume_cleanup
+      changed_when: restore_test_volume_cleanup.rc == 0
+      failed_when: false
+      when: restore_test_volume_name is defined
+
+    - name: Remove isolated validation and extraction data
+      ansible.builtin.file:
+        path: "{{ restore_validation_temp.path }}"
+        state: absent
+      when: restore_validation_temp is defined
+
+- name: Mark isolated test cleanup complete
+  ansible.builtin.set_fact:
+    restore_test_summary: >-
+      {{
+        restore_test_summary |
+        combine({"cleanup": "completed"})
+      }}
+  when: restore_test_summary is defined

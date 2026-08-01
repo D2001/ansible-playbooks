@@ -2,10 +2,14 @@
 - name: Reject restore modes that are not hardened yet
   ansible.builtin.fail:
     msg: >-
-      restore_mode={{ restore_mode }} is disabled. Only the non-destructive
-      restore_mode=validate is currently implemented.
-  when: restore_mode != "validate"
+      restore_mode={{ restore_mode }} is disabled. Available hardened modes
+      are validate and the Paperless-only isolated test mode.
+  when: restore_mode not in ["validate", "test"]
 
 - name: Validate restore backup without modifying production data
   ansible.builtin.import_tasks: validate_restore.yml
   when: restore_mode == "validate"
+
+- name: Test Paperless database restore in isolated Docker objects
+  ansible.builtin.import_tasks: test_restore.yml
+  when: restore_mode == "test"

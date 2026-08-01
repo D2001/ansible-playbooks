@@ -1,5 +1,5 @@
 ---
-- name: Validate Docker service restore backup
+- name: Validate or test Docker service restore backup
   hosts: localhost
   gather_facts: true
 
@@ -15,7 +15,8 @@
     rclone_remote: "onedrive:backups/{{ service_name }}_backups"
     backup_pattern: "{{ service_name }}_backup_*.tar.gz"
 
-    # Only the non-destructive mode is currently enabled.
+    # validate: archive-only verification
+    # test: isolated test restore; currently Paperless PostgreSQL only
     restore_mode: "validate"
 
     # auto, local, nas or onedrive
@@ -32,14 +33,15 @@
           - >-
             (service_name |
             regex_search('^[A-Za-z0-9][A-Za-z0-9_.-]*$')) is not none
-          - restore_mode == "validate"
+          - restore_mode in ["validate", "test"]
           - restore_source in ["auto", "local", "nas", "onedrive"]
+          - restore_mode != "test" or service_name == "paperless"
         fail_msg: >-
-          A valid service_name is required. Only restore_mode=validate is
-          enabled while restore hardening is under development.
+          A valid service_name is required. restore_mode must be validate or
+          test. The isolated test mode currently supports only Paperless.
 
   tasks:
-    - name: Run non-destructive restore validation
+    - name: Run hardened restore workflow
       ansible.builtin.import_role:
         name: docker_restore
 
@@ -61,3 +63,28 @@
           temporary_data_retained: >-
             {{ restore_validation_summary.temporary_data_retained }}
           temporary_path: "{{ restore_validation_summary.temporary_path }}"
+      when: restore_mode == "validate"
+
+    - name: Display isolated restore test summary
+      ansible.builtin.debug:
+        msg:
+          mode: "{{ restore_mode }}"
+          service: "{{ service_name }}"
+          selected_source: "{{ restore_test_summary.source }}"
+          selected_backup: "{{ restore_test_summary.backup }}"
+          database_image: "{{ restore_test_summary.database_image }}"
+          postgres_major: "{{ restore_test_summary.postgres_major }}"
+          readiness: "{{ restore_test_summary.readiness }}"
+          sql_validation: "{{ restore_test_summary.sql_validation }}"
+          documents: "{{ restore_test_summary.document_count }}"
+          migrations: "{{ restore_test_summary.migration_count }}"
+          collation_recorded: >-
+            {{ restore_test_summary.collation_recorded }}
+          collation_actual: >-
+            {{ restore_test_summary.collation_actual }}
+          collation_status: >-
+            {{ restore_test_summary.collation_status }}
+          production_containers_touched: false
+          production_volumes_touched: false
+          cleanup: "{{ restore_test_summary.cleanup }}"
+      when: restore_mode == "test"
