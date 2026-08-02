@@ -317,6 +317,7 @@
         total_file_bytes = 0
         file_count = 0
         errors = []
+        backup_manifest = None
 
         def normalize_name(raw_name):
             name = raw_name
@@ -348,7 +349,12 @@
                     )
                     continue
 
-                if path.parts[0] not in {service, "volumes"}:
+                if path.parts[0] not in {
+                    service,
+                    "volumes",
+                    "binds",
+                    "backup-manifest.json",
+                }:
                     errors.append(
                         f"Unexpected top-level entry: {member.name}"
                     )
@@ -404,6 +410,23 @@
                     total_file_bytes += member.size
                     file_count += 1
 
+                    if name == "backup-manifest.json":
+                        manifest_file = tar.extractfile(member)
+
+                        if manifest_file is None:
+                            errors.append(
+                                "Could not read backup-manifest.json"
+                            )
+                        else:
+                            try:
+                                backup_manifest = json.loads(
+                                    manifest_file.read().decode("utf-8")
+                                )
+                            except (UnicodeDecodeError, json.JSONDecodeError):
+                                errors.append(
+                                    "backup-manifest.json is not valid JSON"
+                                )
+
                 if (
                     len(path.parts) >= 2
                     and path.parts[0] == "volumes"
@@ -424,6 +447,41 @@
                     "Archive contains members below symlink "
                     f"{symlink_name}: {nested_members[0]}"
                 )
+
+        if backup_manifest is not None:
+            if backup_manifest.get("format") != "portable-compose-backup/v1":
+                errors.append("Unsupported portable backup manifest format")
+
+            if backup_manifest.get("service_name") != service:
+                errors.append("Backup manifest service_name does not match request")
+
+            for mount in backup_manifest.get("named_volumes") or []:
+                volume_name = str(mount.get("name") or "")
+                volume_root = f"volumes/{volume_name}"
+
+                if not volume_name or not any(
+                    name == volume_root or name.startswith(volume_root + "/")
+                    for name in names
+                ):
+                    errors.append(
+                        "Manifest volume data is missing: " + volume_name
+                    )
+
+            for mount in backup_manifest.get("external_bind_mounts") or []:
+                archive_path = str(mount.get("archive_path") or "").rstrip("/")
+
+                if (
+                    not archive_path.startswith("binds/")
+                    or ".." in PurePosixPath(archive_path).parts
+                    or not any(
+                        name == archive_path or name.startswith(archive_path + "/")
+                        for name in names
+                    )
+                ):
+                    errors.append(
+                        "Manifest external bind data is missing or unsafe: "
+                        + archive_path
+                    )
 
         for hardlink_name, hardlink_target in hardlink_targets:
             if hardlink_target not in names:
@@ -492,6 +550,7 @@
             "required_entries": required,
             "symlinks": sorted(symlink_paths),
             "warnings": validation_warnings,
+            "portable_manifest": backup_manifest,
         }))
         PY
       args:

@@ -178,6 +178,40 @@
 
 - name: Create Docker backup
   block:
+    - name: Create temporary backup directory
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: "_{{ service_name }}_backup"
+      register: temp_backup_dir
+
+    - name: Install portable backup manifest helper
+      ansible.builtin.copy:
+        src: build_backup_manifest.py
+        dest: "{{ temp_backup_dir.path }}/build_backup_manifest.py"
+        mode: "0700"
+
+    - name: Record portable service and mount manifest
+      ansible.builtin.command:
+        argv:
+          - "{{ temp_backup_dir.path }}/build_backup_manifest.py"
+          - --service-name
+          - "{{ service_name }}"
+          - --service-dir
+          - "{{ service_dir }}"
+          - --output
+          - "{{ temp_backup_dir.path }}/backup-manifest.json"
+      changed_when: true
+
+    - name: Read portable backup manifest
+      ansible.builtin.slurp:
+        src: "{{ temp_backup_dir.path }}/backup-manifest.json"
+      register: portable_backup_manifest_raw
+
+    - name: Store portable backup manifest
+      ansible.builtin.set_fact:
+        portable_backup_manifest: >-
+          {{ portable_backup_manifest_raw.content | b64decode | from_json }}
+
     - name: Stop service containers
       block:
         - name: Stop containers using Docker Compose module
@@ -194,12 +228,6 @@
               - down
           args:
             chdir: "{{ service_dir }}"
-
-    - name: Create temporary backup directory
-      ansible.builtin.tempfile:
-        state: directory
-        suffix: "_{{ service_name }}_backup"
-      register: temp_backup_dir
 
     - name: Backup mounted Docker volumes
       ansible.builtin.command:
@@ -219,11 +247,37 @@
       loop_control:
         label: "{{ item }}"
 
+    - name: Backup writable external bind mounts
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - -v
+          - "{{ item.source }}:/source:ro"
+          - -v
+          - "{{ temp_backup_dir.path }}:/backup"
+          - alpine:3.19
+          - /bin/sh
+          - -c
+          - >-
+            tar czf /backup/bind-{{ item.archive_id }}.tar.gz -C /source .
+      loop: "{{ portable_backup_manifest.external_bind_mounts }}"
+      loop_control:
+        label: "{{ item.source }} -> {{ item.target }}"
+
     - name: Prepare final archive staging directory
       ansible.builtin.file:
         path: "{{ temp_backup_dir.path }}/archive-root"
         state: directory
         mode: "0755"
+
+    - name: Stage portable backup manifest
+      ansible.builtin.copy:
+        src: "{{ temp_backup_dir.path }}/backup-manifest.json"
+        dest: "{{ temp_backup_dir.path }}/archive-root/backup-manifest.json"
+        remote_src: true
+        mode: "0600"
 
     - name: Create and validate final compressed archive
       ansible.builtin.command:
@@ -253,6 +307,7 @@
 
             cleanup_workdir() {
               rm -rf "$ARCHIVE_ROOT/volumes"
+              rm -rf "$ARCHIVE_ROOT/binds"
               rm -f "$ARCHIVE_LIST"
             }
 
@@ -260,7 +315,9 @@
 
             rm -f -- "$FINAL" "$PARTIAL" "$ARCHIVE_LIST"
             rm -rf "$ARCHIVE_ROOT/volumes"
+            rm -rf "$ARCHIVE_ROOT/binds"
             mkdir -p "$ARCHIVE_ROOT/volumes"
+            mkdir -p "$ARCHIVE_ROOT/binds"
 
             test -d "$ARCHIVE_ROOT/$SERVICE_NAME"
             test -f "$ARCHIVE_ROOT/$SERVICE_NAME/docker-compose.yml"
@@ -273,6 +330,10 @@
             for volume_archive in /work/*.tar.gz; do
               [ -e "$volume_archive" ] || break
 
+              case "$(basename "$volume_archive")" in
+                bind-*) continue ;;
+              esac
+
               found_volume=1
               volume_name="$(basename "$volume_archive" .tar.gz)"
 
@@ -281,18 +342,37 @@
               tar -xzf "$volume_archive"                 -C "$ARCHIVE_ROOT/volumes/$volume_name"
             done
 
+            found_bind=0
+
+            for bind_archive in /work/bind-*.tar.gz; do
+              [ -e "$bind_archive" ] || break
+
+              found_bind=1
+              bind_id="$(basename "$bind_archive" .tar.gz)"
+              bind_id="${bind_id#bind-}"
+
+              mkdir -p "$ARCHIVE_ROOT/binds/$bind_id"
+              tar -xzf "$bind_archive" -C "$ARCHIVE_ROOT/binds/$bind_id"
+            done
+
+            set -- backup-manifest.json "$SERVICE_NAME"
+
             if [ "$found_volume" -eq 1 ]; then
-              tar -cf -                 -C "$ARCHIVE_ROOT"                 "$SERVICE_NAME" volumes |
-                gzip -1 > "$PARTIAL"
-            else
-              tar -cf -                 -C "$ARCHIVE_ROOT"                 "$SERVICE_NAME" |
-                gzip -1 > "$PARTIAL"
+              set -- "$@" volumes
             fi
+
+            if [ "$found_bind" -eq 1 ]; then
+              set -- "$@" binds
+            fi
+
+            tar -cf - -C "$ARCHIVE_ROOT" "$@" |
+              gzip -1 > "$PARTIAL"
 
             gzip -t "$PARTIAL"
             tar -tzf "$PARTIAL" > "$ARCHIVE_LIST"
 
             grep -Fqx               "$SERVICE_NAME/docker-compose.yml"               "$ARCHIVE_LIST"
+            grep -Fqx "backup-manifest.json" "$ARCHIVE_LIST"
             {% for required_entry in backup_required_service_entries %}
             grep -Fqx "$SERVICE_NAME/{{ required_entry }}" "$ARCHIVE_LIST"
             {% endfor %}
@@ -304,6 +384,15 @@
                 volume_name="$(basename "$volume_dir")"
 
                 grep -Fqx                   "volumes/$volume_name/"                   "$ARCHIVE_LIST"
+              done
+            fi
+
+            if [ "$found_bind" -eq 1 ]; then
+              for bind_dir in "$ARCHIVE_ROOT"/binds/*; do
+                [ -d "$bind_dir" ] || continue
+
+                bind_id="$(basename "$bind_dir")"
+                grep -Fqx "binds/$bind_id/" "$ARCHIVE_LIST"
               done
             fi
 
