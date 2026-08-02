@@ -1,0 +1,278 @@
+---
+- name: Require explicit empty-target restore confirmation
+  ansible.builtin.assert:
+    that:
+      - restore_install_confirm == "RESTORE " ~ service_name
+    fail_msg: >-
+      Empty-target installation requires
+      -e 'restore_install_confirm=RESTORE {{ service_name }}'.
+
+- name: Retain validated data during empty-target installation
+  ansible.builtin.set_fact:
+    restore_keep_validation_data: >-
+      {{ not (restore_install_plan_only | bool) }}
+
+- name: Select and fully validate installation backup
+  ansible.builtin.include_tasks: validate_restore.yml
+
+- name: Require portable manifest for installation
+  ansible.builtin.assert:
+    that:
+      - restore_manifest.portable_manifest is mapping
+      - >-
+        restore_manifest.portable_manifest.format ==
+        "portable-compose-backup/v1"
+    fail_msg: "Production installation requires a portable manifest backup."
+
+- name: Select original or explicitly overridden service path
+  ansible.builtin.set_fact:
+    restore_effective_target_dir: >-
+      {{
+        restore_install_target_dir
+        if restore_install_target_dir | length > 0
+        else
+        restore_manifest.portable_manifest.service_dir | default(service_dir)
+      }}
+
+- name: Validate installation target path
+  ansible.builtin.assert:
+    that:
+      - restore_effective_target_dir.startswith('/')
+      - restore_effective_target_dir != '/'
+      - restore_effective_target_dir.split('/') | length >= 4
+    fail_msg: "Refusing unsafe installation target path."
+
+- name: Inspect service installation target
+  ansible.builtin.stat:
+    path: "{{ restore_effective_target_dir }}"
+  register: restore_install_target_stat
+
+- name: Inspect existing target directory contents
+  ansible.builtin.find:
+    paths: "{{ restore_effective_target_dir }}"
+    hidden: true
+    recurse: false
+    file_type: any
+  register: restore_install_target_contents
+  when:
+    - restore_install_target_stat.stat.exists
+    - restore_install_target_stat.stat.isdir
+
+- name: Require absent or empty service target
+  ansible.builtin.assert:
+    that:
+      - >-
+        not restore_install_target_stat.stat.exists
+        or
+        (
+          restore_install_target_stat.stat.isdir
+          and restore_install_target_contents.matched | default(0) | int == 0
+        )
+    fail_msg: >-
+      Refusing to overwrite non-empty target {{ restore_effective_target_dir }}.
+
+- name: Inspect target Docker volume names
+  ansible.builtin.command:
+    argv:
+      - docker
+      - volume
+      - inspect
+      - "{{ item.name }}"
+  register: restore_install_existing_volumes
+  changed_when: false
+  failed_when: false
+  loop: "{{ restore_manifest.portable_manifest.named_volumes }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Require unused Docker volume names
+  ansible.builtin.assert:
+    that:
+      - item.rc != 0
+    fail_msg: "Refusing to overwrite existing volume {{ item.item.name }}."
+  loop: "{{ restore_install_existing_volumes.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: Inspect external bind targets
+  ansible.builtin.stat:
+    path: "{{ item.source }}"
+  register: restore_install_external_stats
+  loop: "{{ restore_manifest.portable_manifest.external_bind_mounts }}"
+  loop_control:
+    label: "{{ item.source }}"
+
+- name: Inspect existing external bind contents
+  ansible.builtin.find:
+    paths: "{{ item.item.source }}"
+    hidden: true
+    recurse: false
+    file_type: any
+  register: restore_install_external_contents
+  when:
+    - item.stat.exists
+    - item.stat.isdir
+  loop: "{{ restore_install_external_stats.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.source }}"
+
+- name: Require absent or empty external bind targets
+  ansible.builtin.assert:
+    that:
+      - >-
+        not item.item.stat.exists
+        or
+        (
+          item.item.stat.isdir
+          and item.matched | default(0) | int == 0
+        )
+    fail_msg: "Refusing to overwrite external bind target {{ item.item.item.source }}."
+  when: not (item.skipped | default(false))
+  loop: "{{ restore_install_external_contents.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.item.source }}"
+
+- name: Require replacement-host runtime paths
+  ansible.builtin.stat:
+    path: "{{ item.source }}"
+  register: restore_install_runtime_stats
+  loop: "{{ restore_manifest.portable_manifest.runtime_bind_mounts }}"
+  loop_control:
+    label: "{{ item.source }}"
+
+- name: Validate replacement-host runtime paths
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+    fail_msg: "Required host path is missing: {{ item.item.source }}"
+  loop: "{{ restore_install_runtime_stats.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.source }}"
+
+- name: Install portable service data on empty target
+  block:
+    - name: Create empty service target
+      ansible.builtin.file:
+        path: "{{ restore_effective_target_dir }}"
+        state: directory
+        mode: "0750"
+
+    - name: Copy restored service directory preserving metadata
+      ansible.builtin.command:
+        argv:
+          - cp
+          - -a
+          - "{{ restore_validation_temp.path }}/extracted/{{ service_name }}/."
+          - "{{ restore_effective_target_dir }}/"
+
+    - name: Create external bind target directories
+      ansible.builtin.file:
+        path: "{{ item.source }}"
+        state: directory
+        mode: "0750"
+      loop: "{{ restore_manifest.portable_manifest.external_bind_mounts }}"
+      loop_control:
+        label: "{{ item.source }}"
+
+    - name: Restore external bind data
+      ansible.builtin.command:
+        argv:
+          - cp
+          - -a
+          - >-
+            {{ restore_validation_temp.path }}/extracted/{{ item.archive_path }}/.
+          - "{{ item.source }}/"
+      loop: "{{ restore_manifest.portable_manifest.external_bind_mounts }}"
+      loop_control:
+        label: "{{ item.source }}"
+
+    - name: Create empty production Docker volumes
+      ansible.builtin.command:
+        argv:
+          - docker
+          - volume
+          - create
+          - "{{ item.name }}"
+      loop: "{{ restore_manifest.portable_manifest.named_volumes }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Restore production Docker volume contents
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - -v
+          - "{{ item.name }}:/restore"
+          - -v
+          - "{{ restore_validation_temp.path }}/extracted:/archive:ro"
+          - alpine:3.19
+          - /bin/sh
+          - -c
+          - "cp -a /archive/volumes/{{ item.name }}/. /restore/"
+      loop: "{{ restore_manifest.portable_manifest.named_volumes }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Validate installed Compose configuration
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - --project-directory
+          - "{{ restore_effective_target_dir }}"
+          - config
+          - --quiet
+      changed_when: false
+
+    - name: Start restored service
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - --project-directory
+          - "{{ restore_effective_target_dir }}"
+          - up
+          - -d
+      when: restore_install_start | bool
+
+    - name: Store successful empty-target installation result
+      ansible.builtin.set_fact:
+        restore_install_summary:
+          backup: "{{ restore_selected_name }}"
+          target: "{{ restore_effective_target_dir }}"
+          named_volumes: >-
+            {{ restore_manifest.portable_manifest.named_volumes | length }}
+          external_binds: >-
+            {{ restore_manifest.portable_manifest.external_bind_mounts | length }}
+          started: "{{ restore_install_start | bool }}"
+
+  always:
+    - name: Remove temporary validated installation data
+      ansible.builtin.file:
+        path: "{{ restore_validation_temp.path }}"
+        state: absent
+      when: restore_validation_temp is defined
+  when: not (restore_install_plan_only | bool)
+
+- name: Store successful empty-target installation plan
+  ansible.builtin.set_fact:
+    restore_install_summary:
+      backup: "{{ restore_selected_name }}"
+      target: "{{ restore_effective_target_dir }}"
+      named_volumes: >-
+        {{ restore_manifest.portable_manifest.named_volumes | length }}
+      external_binds: >-
+        {{ restore_manifest.portable_manifest.external_bind_mounts | length }}
+      started: false
+      plan_only: true
+  when: restore_install_plan_only | bool
+
+- name: Remove temporary installation-plan data
+  ansible.builtin.file:
+    path: "{{ restore_validation_temp.path }}"
+    state: absent
+  when:
+    - restore_install_plan_only | bool
+    - restore_validation_temp is defined

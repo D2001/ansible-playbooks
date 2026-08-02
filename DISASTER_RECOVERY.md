@@ -52,8 +52,45 @@ ansible-playbook -i inventory docker/restore.yml \
 
 ## Current recovery boundary
 
-`validate`, `portable_test`, and the Paperless database `test` mode are
-hardened. Destructive in-place restore is intentionally disabled. The next
-recovery stage will install only into an empty target directory and unused
-Docker volume names; replacing an existing installation will require a
-separate, explicit cut-over operation.
+`validate`, `portable_test`, the Paperless database `test` mode, and empty-target
+`install` are hardened. Destructive in-place restore remains intentionally
+disabled. Replacing an existing installation requires a separate, explicit
+cut-over operation.
+
+## Install on a replacement client
+
+The install mode restores to the original absolute service path recorded in a
+new backup manifest. For older portable manifests without that field it falls
+back to the configured `service_dir`, currently `/home/karsten/<service>`.
+External writable bind mounts are restored to their original paths as well.
+
+Always run the read-only installation plan first:
+
+```bash
+ansible-playbook -i inventory docker/restore.yml \
+  -e service_name=paperless \
+  -e restore_mode=install \
+  -e restore_source=auto \
+  -e restore_install_plan_only=true \
+  -e '{"restore_install_confirm":"RESTORE paperless"}'
+```
+
+The plan and installation refuse to continue if the service directory, an
+external bind target, or any required Docker volume name is already occupied.
+They also verify required read-only host paths before writing data.
+
+On a genuinely empty replacement client, remove the plan-only option:
+
+```bash
+ansible-playbook -i inventory docker/restore.yml \
+  -e service_name=paperless \
+  -e restore_mode=install \
+  -e restore_source=auto \
+  -e '{"restore_install_confirm":"RESTORE paperless"}'
+```
+
+Use `homeassistant` and `RESTORE homeassistant` for the Home Assistant stack.
+Set `restore_install_start=false` to install the files and volumes without
+starting containers. An alternative target is possible through
+`restore_install_target_dir`, but Compose files containing absolute bind paths
+must then be adjusted explicitly before startup.

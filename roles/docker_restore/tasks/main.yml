@@ -3,8 +3,8 @@
   ansible.builtin.fail:
     msg: >-
       restore_mode={{ restore_mode }} is disabled. Available hardened modes
-      are validate, portable_test and the Paperless-only isolated test mode.
-  when: restore_mode not in ["validate", "portable_test", "test"]
+      are validate, portable_test, install and the Paperless-only isolated test.
+  when: restore_mode not in ["validate", "portable_test", "test", "install"]
 
 - name: Validate restore backup without modifying production data
   ansible.builtin.include_tasks: validate_restore.yml
@@ -17,3 +17,7 @@
 - name: Test generic portable data reconstruction
   ansible.builtin.include_tasks: test_portable_restore.yml
   when: restore_mode == "portable_test"
+
+- name: Install service on an empty replacement target
+  ansible.builtin.include_tasks: install_restore.yml
+  when: restore_mode == "install"

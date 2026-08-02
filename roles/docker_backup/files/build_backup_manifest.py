@@ -100,6 +100,7 @@ def main():
     manifest = {
         "format": "portable-compose-backup/v1",
         "service_name": args.service_name,
+        "service_dir": str(service_dir),
         "compose_project": compose.get("name", args.service_name),
         "services": services,
         "named_volumes": sorted(

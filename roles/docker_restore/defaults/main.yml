@@ -12,6 +12,13 @@ restore_download_retries: 3
 restore_min_free_margin_mb: 1024
 restore_keep_validation_data: false
 
+# Empty-target disaster recovery settings. The original service path recorded
+# in the manifest is used unless this is explicitly overridden.
+restore_install_target_dir: ""
+restore_install_confirm: ""
+restore_install_start: true
+restore_install_plan_only: false
+
 # Isolated test-restore settings.
 restore_test_start_retries: 60
 restore_test_start_delay: 2

@@ -17,6 +17,7 @@
 
     # validate: archive-only verification
     # portable_test: generic isolated data reconstruction for manifest backups
+    # install: restore only to empty original paths on a replacement client
     # test: isolated application-aware test; currently Paperless PostgreSQL only
     restore_mode: "validate"
 
@@ -34,13 +35,13 @@
           - >-
             (service_name |
             regex_search('^[A-Za-z0-9][A-Za-z0-9_.-]*$')) is not none
-          - restore_mode in ["validate", "portable_test", "test"]
+          - restore_mode in ["validate", "portable_test", "test", "install"]
           - restore_source in ["auto", "local", "nas", "onedrive"]
           - restore_mode != "test" or service_name == "paperless"
         fail_msg: >-
           A valid service_name is required. restore_mode must be validate,
-          portable_test or test. The application-aware test mode currently
-          supports only Paperless.
+          portable_test, test or install. The application-aware test mode
+          currently supports only Paperless.
 
   tasks:
     - name: Run hardened restore workflow
@@ -109,3 +110,15 @@
           production_volumes_touched: false
           cleanup: "{{ portable_restore_test_summary.cleanup }}"
       when: restore_mode == "portable_test"
+
+    - name: Display empty-target installation summary
+      ansible.builtin.debug:
+        msg:
+          mode: "{{ restore_mode }}"
+          service: "{{ service_name }}"
+          selected_backup: "{{ restore_install_summary.backup }}"
+          target: "{{ restore_install_summary.target }}"
+          named_volumes: "{{ restore_install_summary.named_volumes }}"
+          external_binds: "{{ restore_install_summary.external_binds }}"
+          containers_started: "{{ restore_install_summary.started }}"
+      when: restore_mode == "install"
