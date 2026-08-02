@@ -11,3 +11,28 @@ backup_file: "{{ service_name }}_backup_{{ timestamp }}.tar.gz"
 # Health check settings
 health_check_retries: 30
 health_check_delay: 10
+
+# Files required for a self-contained service restore.
+backup_required_service_entries_map:
+  paperless:
+    - ".env"
+
+backup_sensitive_service_entries_map:
+  paperless:
+    - ".env"
+
+backup_required_service_entries: >-
+  {{
+    backup_required_service_entries_map.get(
+      service_name,
+      []
+    )
+  }}
+
+backup_sensitive_service_entries: >-
+  {{
+    backup_sensitive_service_entries_map.get(
+      service_name,
+      []
+    )
+  }}

@@ -7,9 +7,9 @@
   when: restore_mode not in ["validate", "test"]
 
 - name: Validate restore backup without modifying production data
-  ansible.builtin.import_tasks: validate_restore.yml
+  ansible.builtin.include_tasks: validate_restore.yml
   when: restore_mode == "validate"
 
 - name: Test Paperless database restore in isolated Docker objects
-  ansible.builtin.import_tasks: test_restore.yml
+  ansible.builtin.include_tasks: test_restore.yml
   when: restore_mode == "test"

@@ -23,6 +23,25 @@
       - compose_file_stat.stat.isreg
     fail_msg: "Docker Compose file does not exist: {{ compose_file }}"
 
+- name: Preflight sensitive restore files
+  ansible.builtin.stat:
+    path: "{{ service_dir }}/{{ item }}"
+  loop: "{{ backup_sensitive_service_entries }}"
+  register: sensitive_backup_entries
+
+- name: Require sensitive files to be regular and private
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isreg
+      - (item.stat.mode | default('0000')) is regex('^0?[0-7]00$')
+    fail_msg: >-
+      Sensitive file {{ item.stat.path | default(item.item) }} must exist as a
+      regular file and deny group/other permissions. Current mode is
+      {{ item.stat.mode | default('unknown') }}.
+  loop: "{{ sensitive_backup_entries.results | default([]) }}"
+  when: backup_sensitive_service_entries | length > 0
+
 - name: Verify NAS backup root is mounted
   ansible.builtin.command:
     argv:
@@ -245,6 +264,9 @@
 
             test -d "$ARCHIVE_ROOT/$SERVICE_NAME"
             test -f "$ARCHIVE_ROOT/$SERVICE_NAME/docker-compose.yml"
+            {% for required_entry in backup_required_service_entries %}
+            test -f "$ARCHIVE_ROOT/$SERVICE_NAME/{{ required_entry }}"
+            {% endfor %}
 
             found_volume=0
 
@@ -271,6 +293,9 @@
             tar -tzf "$PARTIAL" > "$ARCHIVE_LIST"
 
             grep -Fqx               "$SERVICE_NAME/docker-compose.yml"               "$ARCHIVE_LIST"
+            {% for required_entry in backup_required_service_entries %}
+            grep -Fqx "$SERVICE_NAME/{{ required_entry }}" "$ARCHIVE_LIST"
+            {% endfor %}
 
             if [ "$found_volume" -eq 1 ]; then
               for volume_dir in "$ARCHIVE_ROOT"/volumes/*; do
@@ -286,7 +311,7 @@
 
             mv -f -- "$PARTIAL" "$FINAL"
             chown "$BACKUP_OWNER" "$FINAL"
-            chmod 0644 "$FINAL"
+            chmod 0600 "$FINAL"
 
             echo "Created and validated: $FINAL"
 

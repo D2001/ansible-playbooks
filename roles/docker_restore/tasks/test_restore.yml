@@ -13,7 +13,7 @@
         restore_keep_validation_data: true
 
     - name: Select and fully validate backup before test restore
-      ansible.builtin.import_tasks: validate_restore.yml
+      ansible.builtin.include_tasks: validate_restore.yml
 
     - name: Generate isolated Docker object identifier
       ansible.builtin.set_fact:
@@ -27,118 +27,202 @@
         restore_test_container_name: >-
           paperless-restore-test-db-{{ restore_test_id }}
 
-    - name: Read production PostgreSQL runtime configuration safely
+    - name: Read restored PostgreSQL Compose configuration safely
       ansible.builtin.shell: |
         set -euo pipefail
 
-        python3 - "{{ restore_test_paperless_db_container }}" <<'PY'
+        python3 -           "{{ restore_validation_temp.path }}/extracted/{{ service_name }}/docker-compose.yml"           <<'PY'
         import json
         import os
+        import re
         import subprocess
         import sys
+        from pathlib import Path
 
-        container_name = sys.argv[1]
+        compose_file = Path(sys.argv[1]).resolve()
+        compose_dir = compose_file.parent
 
-        result = subprocess.run(
-            ["docker", "inspect", container_name],
+        compose_result = subprocess.run(
+            [
+                "docker",
+                "compose",
+                "--project-directory",
+                str(compose_dir),
+                "-f",
+                str(compose_file),
+                "config",
+                "--format",
+                "json",
+            ],
+            cwd=compose_dir,
             text=True,
             capture_output=True,
-            check=True,
+            check=False,
         )
 
-        container = json.loads(result.stdout)[0]
-        config = container.get("Config") or {}
+        if compose_result.returncode != 0:
+            raise SystemExit(
+                "Restored Docker Compose configuration "
+                "could not be resolved"
+            )
 
-        environment = {}
+        compose_config = json.loads(compose_result.stdout)
 
-        for entry in config.get("Env") or []:
-            if "=" in entry:
-                key, value = entry.split("=", 1)
-                environment[key] = value
+        def normalize_environment(raw_environment):
+            if isinstance(raw_environment, dict):
+                return {
+                    str(key): (
+                        ""
+                        if value is None
+                        else str(value)
+                    )
+                    for key, value in raw_environment.items()
+                }
 
-        required = [
+            result = {}
+
+            for entry in raw_environment or []:
+                entry = str(entry)
+
+                if "=" in entry:
+                    key, value = entry.split("=", 1)
+                    result[key] = value
+
+            return result
+
+        required_environment = {
             "POSTGRES_USER",
             "POSTGRES_DB",
             "POSTGRES_PASSWORD",
-            "PG_MAJOR",
-        ]
+        }
 
-        missing = [
-            key
-            for key in required
-            if key not in environment
-        ]
+        candidates = []
 
-        if missing:
-            raise SystemExit(
-                "Missing PostgreSQL environment keys: "
-                + ", ".join(missing)
+        for service_name, service in (
+            compose_config.get("services") or {}
+        ).items():
+            image = str(service.get("image") or "").strip()
+            environment = normalize_environment(
+                service.get("environment")
             )
 
-        pgdata = environment.get(
-            "PGDATA",
-            "/var/lib/postgresql/data",
-        )
+            if not image:
+                continue
 
-        matching_mounts = []
+            if not required_environment.issubset(environment):
+                continue
 
-        for mount in container.get("Mounts") or []:
-            destination = (
-                mount.get("Destination") or ""
-            ).rstrip("/")
+            if any(
+                not environment[key]
+                for key in required_environment
+            ):
+                continue
+
+            pgdata = os.path.normpath(
+                environment.get("PGDATA")
+                or "/var/lib/postgresql/data"
+            )
+
+            matching_mounts = []
+
+            for volume in service.get("volumes") or []:
+                if not isinstance(volume, dict):
+                    continue
+
+                target = os.path.normpath(
+                    str(volume.get("target") or "")
+                )
+
+                if not target.startswith("/"):
+                    continue
+
+                if (
+                    pgdata == target
+                    or pgdata.startswith(target.rstrip("/") + "/")
+                ):
+                    matching_mounts.append(volume)
+
+            if len(matching_mounts) != 1:
+                continue
+
+            image_result = subprocess.run(
+                ["docker", "image", "inspect", image],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            if image_result.returncode != 0:
+                continue
+
+            image_data = json.loads(image_result.stdout)[0]
+            image_environment = normalize_environment(
+                (image_data.get("Config") or {}).get("Env")
+            )
+
+            pg_major = image_environment.get(
+                "PG_MAJOR",
+                "",
+            ).strip()
+
+            if not pg_major:
+                image_match = re.search(
+                    r"(?:^|/)postgres:([0-9]+)(?:[-@]|$)",
+                    image,
+                )
+
+                if image_match:
+                    pg_major = image_match.group(1)
+
+            if not pg_major:
+                continue
+
+            mount = matching_mounts[0]
+            mount_target = os.path.normpath(
+                str(mount.get("target") or "")
+            )
+
+            pgdata_relative = os.path.relpath(
+                pgdata,
+                mount_target,
+            )
+
+            if pgdata_relative == ".":
+                pgdata_relative = ""
 
             if (
-                mount.get("Type") == "volume"
-                and (
-                    pgdata == destination
-                    or pgdata.startswith(destination + "/")
-                )
+                pgdata_relative == ".."
+                or pgdata_relative.startswith("../")
             ):
-                matching_mounts.append(mount)
+                continue
 
-        if len(matching_mounts) != 1:
+            candidates.append({
+                "compose_service": service_name,
+                "image": image,
+                "postgres_user": environment[
+                    "POSTGRES_USER"
+                ],
+                "postgres_db": environment[
+                    "POSTGRES_DB"
+                ],
+                "postgres_password": environment[
+                    "POSTGRES_PASSWORD"
+                ],
+                "pg_major": pg_major,
+                "pgdata": pgdata,
+                "mount_target": mount_target,
+                "pgdata_relative": pgdata_relative,
+                "volume_source": mount.get("source"),
+            })
+
+        if len(candidates) != 1:
             raise SystemExit(
-                "Could not identify exactly one PostgreSQL "
-                "data volume mount"
+                "Expected exactly one PostgreSQL service "
+                "in the restored Compose configuration, "
+                f"found {len(candidates)}"
             )
 
-        mount = matching_mounts[0]
-        mount_target = (
-            mount.get("Destination") or ""
-        ).rstrip("/") or "/"
-
-        normalized_pgdata = os.path.normpath(pgdata)
-        normalized_mount = os.path.normpath(mount_target)
-
-        pgdata_relative = os.path.relpath(
-            normalized_pgdata,
-            normalized_mount,
-        )
-
-        if pgdata_relative == ".":
-            pgdata_relative = ""
-
-        if (
-            pgdata_relative == ".."
-            or pgdata_relative.startswith("../")
-        ):
-            raise SystemExit(
-                "PGDATA is outside the PostgreSQL volume mount"
-            )
-
-        print(json.dumps({
-            "image": config.get("Image"),
-            "postgres_user": environment["POSTGRES_USER"],
-            "postgres_db": environment["POSTGRES_DB"],
-            "postgres_password": environment[
-                "POSTGRES_PASSWORD"
-            ],
-            "pg_major": environment["PG_MAJOR"],
-            "pgdata": normalized_pgdata,
-            "mount_target": normalized_mount,
-            "pgdata_relative": pgdata_relative,
-            "production_volume": mount.get("Name"),
-        }))
+        print(json.dumps(candidates[0]))
         PY
       args:
         executable: /bin/bash
@@ -146,7 +230,7 @@
       changed_when: false
       no_log: true
 
-    - name: Store production PostgreSQL configuration
+    - name: Store restored PostgreSQL configuration
       ansible.builtin.set_fact:
         restore_test_db_config: >-
           {{ restore_test_db_config_raw.stdout | from_json }}
@@ -247,7 +331,7 @@
             ) is not none
         fail_msg: >-
           The backup PostgreSQL version or PGDATA layout is incompatible with
-          the currently running Paperless PostgreSQL image.
+          the PostgreSQL image declared by the restored Compose configuration.
 
     - name: Verify isolated container name is unused
       ansible.builtin.command:
@@ -566,6 +650,7 @@
         restore_test_summary:
           source: "{{ restore_selected_source }}"
           backup: "{{ restore_selected_name }}"
+          database_service: "{{ restore_test_db_config.compose_service }}"
           database_image: "{{ restore_test_db_config.image }}"
           postgres_major: "{{ restore_test_archive_db.pg_version }}"
           readiness: "passed"

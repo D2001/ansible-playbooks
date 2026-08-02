@@ -13,13 +13,13 @@ restore_min_free_margin_mb: 1024
 restore_keep_validation_data: false
 
 # Isolated test-restore settings.
-restore_test_paperless_db_container: "paperless-db"
 restore_test_start_retries: 60
 restore_test_start_delay: 2
 
 restore_required_entries_map:
   paperless:
     - "paperless/docker-compose.yml"
+    - "paperless/.env"
     - "volumes/paperless_paperless_data/"
     - "volumes/paperless_paperless_media/"
     - "volumes/paperless_paperless_pgdata/PG_VERSION"

@@ -17,15 +17,25 @@
 
         cp -- "$SOURCE" "$PARTIAL"
 
+        mv -f -- "$PARTIAL" "$TARGET"
+        chmod 0600 "$TARGET" || true
+
         LOCAL_SIZE="$(stat -c %s "$SOURCE")"
-        NAS_SIZE="$(stat -c %s "$PARTIAL")"
+        NAS_SIZE="$(stat -c %s "$TARGET")"
+        LOCAL_OWNER="$(stat -c %u:%g "$SOURCE")"
+        NAS_OWNER="$(stat -c %u:%g "$TARGET")"
+        NAS_MODE="$(stat -c %a "$TARGET")"
+        NAS_OTHER="${NAS_MODE#${NAS_MODE%?}}"
 
         test "$LOCAL_SIZE" = "$NAS_SIZE"
+        test "$LOCAL_OWNER" = "$NAS_OWNER"
+        test "$NAS_OTHER" = "0"
 
-        mv -f -- "$PARTIAL" "$TARGET"
-        chmod 0644 "$TARGET" || true
+        if [ "$NAS_MODE" != "600" ]; then
+          echo "WARN: NAS mode is $NAS_MODE (expected 600). On CIFS with nounix/file_mode this can be normal as long as owner and other-bits are safe." >&2
+        fi
 
-        echo "NAS verified: $TARGET ($NAS_SIZE bytes)"
+        echo "NAS verified: $TARGET ($NAS_SIZE bytes, owner $NAS_OWNER, mode $NAS_MODE)"
       args:
         executable: /bin/bash
 

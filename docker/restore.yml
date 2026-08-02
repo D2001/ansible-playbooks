@@ -72,6 +72,7 @@
           service: "{{ service_name }}"
           selected_source: "{{ restore_test_summary.source }}"
           selected_backup: "{{ restore_test_summary.backup }}"
+          database_service: "{{ restore_test_summary.database_service }}"
           database_image: "{{ restore_test_summary.database_image }}"
           postgres_major: "{{ restore_test_summary.postgres_major }}"
           readiness: "{{ restore_test_summary.readiness }}"
