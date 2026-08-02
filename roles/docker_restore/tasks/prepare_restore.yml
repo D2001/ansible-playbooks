@@ -1,4 +1,11 @@
 ---
+- name: Refuse deprecated destructive restore preparation
+  ansible.builtin.fail:
+    msg: >-
+      prepare_restore.yml is deprecated and intentionally disabled because it
+      predates portable manifest validation. Use docker/restore.yml with
+      restore_mode=validate or restore_mode=portable_test.
+
 # Download/copy backup and create emergency backup
 # Requires: restore_source, restore_file variables
 # Returns: final_backup_file variable

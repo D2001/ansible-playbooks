@@ -1,4 +1,10 @@
 ---
+- name: Refuse deprecated backup discovery implementation
+  ansible.builtin.fail:
+    msg: >-
+      find_backup.yml is deprecated. Hardened source discovery is implemented
+      by validate_restore.yml and must be used through docker/restore.yml.
+
 # Find the latest backup from local, NAS, or OneDrive
 # Returns: restore_source, restore_file variables
 

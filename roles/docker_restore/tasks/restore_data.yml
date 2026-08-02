@@ -1,4 +1,11 @@
 ---
+- name: Refuse deprecated destructive restore implementation
+  ansible.builtin.fail:
+    msg: >-
+      restore_data.yml is deprecated and intentionally disabled because it can
+      delete an existing service directory. Use the hardened restore modes in
+      docker/restore.yml.
+
 # Extract service files and restore Docker volumes
 # Requires: final_backup_file variable
 
