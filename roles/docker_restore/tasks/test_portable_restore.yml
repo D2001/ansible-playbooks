@@ -1,0 +1,152 @@
+---
+- name: Perform generic portable restore test
+  block:
+    - name: Retain validated files until portable test cleanup
+      ansible.builtin.set_fact:
+        restore_keep_validation_data: true
+        portable_restore_test_volumes: []
+
+    - name: Select and fully validate portable backup
+      ansible.builtin.include_tasks: validate_restore.yml
+
+    - name: Require portable backup manifest
+      ansible.builtin.assert:
+        that:
+          - restore_manifest.portable_manifest is mapping
+          - >-
+            restore_manifest.portable_manifest.format ==
+            "portable-compose-backup/v1"
+        fail_msg: >-
+          portable_test requires a backup created with the portable manifest
+          format. Legacy archives remain available to validate mode.
+
+    - name: Generate isolated portable restore identifier
+      ansible.builtin.set_fact:
+        portable_restore_test_id: >-
+          {{ 999999999999 | random | string }}
+
+    - name: Define isolated test volume mapping
+      ansible.builtin.set_fact:
+        portable_restore_test_volumes: >-
+          {{
+            portable_restore_test_volumes
+            +
+            [
+              item
+              |
+              combine(
+                {
+                  "test_name":
+                    "restore-test-"
+                    ~ service_name
+                    ~ "-"
+                    ~ portable_restore_test_id
+                    ~ "-"
+                    ~ (portable_restore_test_volumes | length | string)
+                }
+              )
+            ]
+          }}
+      loop: "{{ restore_manifest.portable_manifest.named_volumes }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Verify isolated volume names are unused
+      ansible.builtin.command:
+        argv:
+          - docker
+          - volume
+          - inspect
+          - "{{ item.test_name }}"
+      register: portable_restore_existing_volumes
+      changed_when: false
+      failed_when: false
+      loop: "{{ portable_restore_test_volumes }}"
+      loop_control:
+        label: "{{ item.test_name }}"
+
+    - name: Require unused isolated volume names
+      ansible.builtin.assert:
+        that:
+          - item.rc != 0
+        fail_msg: "Refusing to reuse Docker volume {{ item.item.test_name }}."
+      loop: "{{ portable_restore_existing_volumes.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.test_name }}"
+
+    - name: Create isolated restore-test volumes
+      ansible.builtin.command:
+        argv:
+          - docker
+          - volume
+          - create
+          - "{{ item.test_name }}"
+      loop: "{{ portable_restore_test_volumes }}"
+      loop_control:
+        label: "{{ item.test_name }}"
+
+    - name: Restore named volume data into isolated volumes
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - -v
+          - "{{ item.test_name }}:/restore"
+          - -v
+          - "{{ restore_validation_temp.path }}/extracted:/archive:ro"
+          - alpine:3.19
+          - /bin/sh
+          - -c
+          - >-
+            cp -a /archive/volumes/{{ item.name }}/. /restore/
+      loop: "{{ portable_restore_test_volumes }}"
+      loop_control:
+        label: "{{ item.name }} -> {{ item.test_name }}"
+
+    - name: Count restored service files and portable data declarations
+      ansible.builtin.set_fact:
+        portable_restore_test_summary:
+          source: "{{ restore_selected_source }}"
+          backup: "{{ restore_selected_name }}"
+          service_files: "{{ restore_manifest.file_count | int }}"
+          named_volumes: >-
+            {{ restore_manifest.portable_manifest.named_volumes | length }}
+          portable_binds: >-
+            {{ restore_manifest.portable_manifest.portable_bind_mounts | length }}
+          external_binds: >-
+            {{ restore_manifest.portable_manifest.external_bind_mounts | length }}
+          runtime_requirements: >-
+            {{ restore_manifest.portable_manifest.runtime_bind_mounts }}
+          cleanup: "pending"
+
+  always:
+    - name: Remove isolated portable restore-test volumes
+      ansible.builtin.command:
+        argv:
+          - docker
+          - volume
+          - rm
+          - --force
+          - "{{ item.test_name }}"
+      register: portable_restore_volume_cleanup
+      changed_when: portable_restore_volume_cleanup.rc == 0
+      failed_when: false
+      loop: "{{ portable_restore_test_volumes | default([]) }}"
+      loop_control:
+        label: "{{ item.test_name }}"
+
+    - name: Remove isolated portable validation data
+      ansible.builtin.file:
+        path: "{{ restore_validation_temp.path }}"
+        state: absent
+      when: restore_validation_temp is defined
+
+- name: Mark generic portable restore cleanup complete
+  ansible.builtin.set_fact:
+    portable_restore_test_summary: >-
+      {{
+        portable_restore_test_summary |
+        combine({"cleanup": "completed"})
+      }}
+  when: portable_restore_test_summary is defined
