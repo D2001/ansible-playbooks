@@ -77,22 +77,27 @@ As of 2026-08-03, the current local backups have been verified as follows:
   install without startup, drill-safe start, HTTP check, document-count check,
   outbound block, and cleanup in the `restore-drill` VM.
 - Home Assistant: `validate`, `portable_test`, and `install` plan-only pass
-  against `homeassistant_backup_20260802T164001.tar.gz`.
+  against `homeassistant_backup_20260802T164001.tar.gz`. After promoting this
+  hardening branch to the production checkout, a fresh portable backup,
+  `homeassistant_backup_20260803T204459.tar.gz`, was created from
+  `/home/karsten/ansible-playbooks`, verified locally, copied to NAS and
+  OneDrive, and validated with `restore_mode=validate`.
 - Home Assistant replacement drill: `docker/restore-drill.sh --service
   homeassistant --reset-vm-target` successfully repeated reset, install plan,
-  and install without startup in the `restore-drill` VM. The restored Compose
-  services are `homeassistant`, `mosquitto`, and `nodered`; `/etc/localtime`
-  and `/run/dbus` replacement-host runtime requirements were present; no
-  containers were started.
+  and install without startup in the `restore-drill` VM for
+  `homeassistant_backup_20260803T204459.tar.gz`. The restored Compose services
+  are `homeassistant`, `mosquitto`, and `nodered`; `/etc/localtime` and
+  `/run/dbus` replacement-host runtime requirements were present; no containers
+  were started.
 - XMLTV: a fresh manifest backup, `xmltv_backup_20260802T224938.tar.gz`, passes
   `validate`, `portable_test`, and `install` plan-only.
 
 The newer Home Assistant cron backup
 `homeassistant_backup_20260803T010005.tar.gz` did not contain
 `backup-manifest.json`, so it was skipped by the repeatable KVM drill. The
-active production checkout at `/home/karsten/ansible-playbooks` is still on
-`main` and does not contain the portable manifest backup code from this
-hardening branch.
+production checkout has since been fast-forwarded to the hardened backup code,
+and the replacement backup `homeassistant_backup_20260803T204459.tar.gz`
+contains the portable manifest.
 
 The Paperless database restore test currently reports a PostgreSQL collation
 version warning: the restored database records `2.36`, while the current
