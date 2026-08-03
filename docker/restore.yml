@@ -120,5 +120,6 @@
           target: "{{ restore_install_summary.target }}"
           named_volumes: "{{ restore_install_summary.named_volumes }}"
           external_binds: "{{ restore_install_summary.external_binds }}"
+          drill_override: "{{ restore_install_summary.drill_override }}"
           containers_started: "{{ restore_install_summary.started }}"
       when: restore_mode == "install"

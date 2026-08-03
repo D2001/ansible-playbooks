@@ -100,6 +100,17 @@ ansible-playbook -i inventory restore.yml -e "service_name=paperless"
 ansible-playbook -i inventory validate_backup.yml -e "service_name=paperless"
 ```
 
+### Repeat a KVM Restore Drill
+
+```bash
+./docker/restore-drill.sh --service paperless --reset-vm-target --drill-start
+```
+
+The drill script syncs this checkout and one selected portable backup into the
+configured KVM test VM, runs the hardened empty-target install with
+`restore_install_start=false`, and optionally starts Paperless through the
+drill-safe Compose override.
+
 ## 🔧 Configuration
 
 ### Main Variables

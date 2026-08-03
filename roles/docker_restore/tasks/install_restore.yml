@@ -89,7 +89,14 @@
   ansible.builtin.assert:
     that:
       - item.rc != 0
-    fail_msg: "Refusing to overwrite existing volume {{ item.item.name }}."
+      - "'no such volume' in (item.stderr | lower)"
+    fail_msg: >-
+      {% if item.rc == 0 %}
+      Refusing to overwrite existing Docker volume {{ item.item.name }}.
+      {% else %}
+      Refusing to continue after unexpected Docker volume inspect error for
+      {{ item.item.name }}: {{ item.stderr | default('') }}
+      {% endif %}
   loop: "{{ restore_install_existing_volumes.results | default([]) }}"
   loop_control:
     label: "{{ item.item.name }}"
@@ -226,6 +233,34 @@
           - --quiet
       changed_when: false
 
+    - name: Write Paperless drill-safe Compose override
+      ansible.builtin.copy:
+        src: paperless/docker-compose.drill.yml
+        dest: "{{ restore_effective_target_dir }}/docker-compose.drill.yml"
+        mode: "0640"
+      register: restore_install_drill_override
+      when:
+        - service_name == "paperless"
+        - restore_install_write_drill_override | bool
+
+    - name: Validate Paperless drill-safe Compose override
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - --project-directory
+          - "{{ restore_effective_target_dir }}"
+          - -f
+          - "{{ restore_effective_target_dir }}/docker-compose.yml"
+          - -f
+          - "{{ restore_effective_target_dir }}/docker-compose.drill.yml"
+          - config
+          - --quiet
+      changed_when: false
+      when:
+        - service_name == "paperless"
+        - restore_install_write_drill_override | bool
+
     - name: Start restored service
       ansible.builtin.command:
         argv:
@@ -246,6 +281,13 @@
             {{ restore_manifest.portable_manifest.named_volumes | length }}
           external_binds: >-
             {{ restore_manifest.portable_manifest.external_bind_mounts | length }}
+          drill_override: >-
+            {{
+              restore_effective_target_dir ~ '/docker-compose.drill.yml'
+              if service_name == 'paperless'
+              and (restore_install_write_drill_override | bool)
+              else ''
+            }}
           started: "{{ restore_install_start | bool }}"
 
   always:
@@ -265,6 +307,13 @@
         {{ restore_manifest.portable_manifest.named_volumes | length }}
       external_binds: >-
         {{ restore_manifest.portable_manifest.external_bind_mounts | length }}
+      drill_override: >-
+        {{
+          restore_effective_target_dir ~ '/docker-compose.drill.yml'
+          if service_name == 'paperless'
+          and (restore_install_write_drill_override | bool)
+          else ''
+        }}
       started: false
       plan_only: true
   when: restore_install_plan_only | bool

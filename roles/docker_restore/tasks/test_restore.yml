@@ -359,9 +359,16 @@
       ansible.builtin.assert:
         that:
           - restore_test_existing_container.rc != 0
+          - >-
+            'no such container' in
+            (restore_test_existing_container.stderr | lower)
           - restore_test_existing_volume.rc != 0
+          - >-
+            'no such volume' in
+            (restore_test_existing_volume.stderr | lower)
         fail_msg: >-
-          A generated restore-test container or volume name already exists.
+          Refusing to continue after unexpected Docker inspect result for
+          generated restore-test objects.
 
     - name: Create isolated PostgreSQL test volume
       ansible.builtin.command:

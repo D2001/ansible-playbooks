@@ -23,7 +23,7 @@
 
 - name: Validate selected restore backup
   block:
-    - name: Discover and select newest backup across all sources
+    - name: Discover and select newest backup from requested sources
       ansible.builtin.shell: |
         set -euo pipefail
 
@@ -41,6 +41,7 @@
         remote = os.environ["RCLONE_REMOTE"].rstrip("/")
         requested_source = os.environ["REQUESTED_SOURCE"].strip()
         requested_file = os.environ["REQUESTED_FILE"].strip()
+        requested_path = Path(requested_file) if requested_file else None
 
         pattern = re.compile(
             rf"^{re.escape(service)}_backup_"
@@ -59,6 +60,26 @@
         candidates = []
         warnings = []
         seen = set()
+
+        explicit_file_source = None
+
+        if requested_path is not None and requested_path.is_absolute():
+            explicit_file_source = (
+                "nas"
+                if str(requested_path).startswith(
+                    str(nas_dir.parent) + os.sep
+                )
+                else "local"
+            )
+
+        if requested_source == "auto":
+            sources_to_gather = (
+                {explicit_file_source}
+                if explicit_file_source is not None
+                else set(priorities)
+            )
+        else:
+            sources_to_gather = {requested_source}
 
         def add_candidate(source, value):
             value = str(value)
@@ -134,25 +155,22 @@
                         f"{remote}/{name}",
                     )
 
-        gather_local()
-        gather_nas()
-        gather_onedrive()
+        if "local" in sources_to_gather:
+            gather_local()
+
+        if "nas" in sources_to_gather:
+            gather_nas()
+
+        if "onedrive" in sources_to_gather:
+            gather_onedrive()
 
         if requested_file:
             requested_name = Path(requested_file).name
 
             # Also allow an explicit absolute local or NAS path.
-            if Path(requested_file).is_absolute():
-                inferred_source = (
-                    "nas"
-                    if str(requested_file).startswith(
-                        str(nas_dir.parent) + os.sep
-                    )
-                    else "local"
-                )
-
-                if requested_source in {"auto", inferred_source}:
-                    add_candidate(inferred_source, requested_file)
+            if explicit_file_source is not None:
+                if requested_source in {"auto", explicit_file_source}:
+                    add_candidate(explicit_file_source, requested_file)
 
             candidates = [
                 candidate

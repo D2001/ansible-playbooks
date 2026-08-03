@@ -18,6 +18,7 @@ restore_install_target_dir: ""
 restore_install_confirm: ""
 restore_install_start: true
 restore_install_plan_only: false
+restore_install_write_drill_override: true
 
 # Isolated test-restore settings.
 restore_test_start_retries: 60

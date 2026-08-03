@@ -69,7 +69,14 @@
       ansible.builtin.assert:
         that:
           - item.rc != 0
-        fail_msg: "Refusing to reuse Docker volume {{ item.item.test_name }}."
+          - "'no such volume' in (item.stderr | lower)"
+        fail_msg: >-
+          {% if item.rc == 0 %}
+          Refusing to reuse existing Docker volume {{ item.item.test_name }}.
+          {% else %}
+          Refusing to continue after unexpected Docker volume inspect error for
+          {{ item.item.test_name }}: {{ item.stderr | default('') }}
+          {% endif %}
       loop: "{{ portable_restore_existing_volumes.results | default([]) }}"
       loop_control:
         label: "{{ item.item.test_name }}"

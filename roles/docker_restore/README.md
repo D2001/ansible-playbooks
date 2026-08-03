@@ -43,6 +43,8 @@ Performs the actual data restoration:
 - `backup_dir`: Service-specific backup directory
 - `compose_file`: Path to docker-compose.yml file
 - `restore_timeout`: Timeout for restore operations
+- `restore_install_write_drill_override`: Write a Paperless drill-safe Compose
+  override during empty-target install. Enabled by default.
 
 ## Usage
 
