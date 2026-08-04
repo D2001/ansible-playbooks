@@ -87,6 +87,14 @@ As of 2026-08-04, the current local backups have been verified as follows:
   post-check reported `2.41`/`2.41`, 390 documents, and 237 migrations. A
   drill-safe Paperless start after the maintenance reached HTTP 302 through
   the proxy and all containers became healthy.
+- Paperless production PostgreSQL collation maintenance: after creating and
+  validating `paperless_backup_20260804T210244.tar.gz`, the production
+  Paperless application and Redis containers were stopped while PostgreSQL
+  remained healthy. `REINDEX DATABASE paperless;` followed by
+  `ALTER DATABASE paperless REFRESH COLLATION VERSION;` completed in about 6
+  seconds. The post-check reported `2.41`/`2.41`, 390 documents, and 237
+  migrations, and the Paperless, PostgreSQL, and Redis containers returned to
+  healthy status.
 - Home Assistant: the regular backup
   `homeassistant_backup_20260804T010003.tar.gz` contains
   `backup-manifest.json`, was copied to NAS and OneDrive, passes `validate`,
@@ -112,7 +120,7 @@ the portable manifest.
 The Paperless database restore test initially reported a PostgreSQL collation
 version warning: the restored database recorded `2.36`, while the current
 PostgreSQL image provided `2.41`. This was rehearsed successfully in the
-restore VM, but production has not been modified yet.
+restore VM and completed in production on 2026-08-04.
 
 PostgreSQL documents the safe order as rebuilding affected objects, for
 example with `REINDEX`, then refreshing the recorded collation version with
