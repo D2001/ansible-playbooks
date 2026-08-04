@@ -58,10 +58,12 @@ ansible-playbook -i inventory docker/restore.yml \
 disabled. Replacing an existing installation requires a separate, explicit
 cut-over operation.
 
-As of 2026-08-03, the current local backups have been verified as follows:
+As of 2026-08-04, the current local backups have been verified as follows:
 
-- Paperless: `validate`, `portable_test`, and the isolated PostgreSQL `test`
-  mode pass against `paperless_backup_20260802T163043.tar.gz`.
+- Paperless: the regular backup `paperless_backup_20260804T012002.tar.gz`
+  contains `backup-manifest.json`, was copied to NAS and OneDrive, passes
+  `validate`, and passes the isolated PostgreSQL `test` mode with 390 documents
+  and 237 migrations.
 - Paperless replacement drill: `install` on a fresh Debian 13 arm64 KVM VM with
   `restore_install_start=false` successfully restored the service directory,
   four Docker volumes, and two external bind targets. A manual Compose start
@@ -76,28 +78,27 @@ As of 2026-08-03, the current local backups have been verified as follows:
   --reset-vm-target --drill-start` successfully repeated reset, install plan,
   install without startup, drill-safe start, HTTP check, document-count check,
   outbound block, and cleanup in the `restore-drill` VM.
-- Home Assistant: `validate`, `portable_test`, and `install` plan-only pass
-  against `homeassistant_backup_20260802T164001.tar.gz`. After promoting this
-  hardening branch to the production checkout, a fresh portable backup,
-  `homeassistant_backup_20260803T204459.tar.gz`, was created from
-  `/home/karsten/ansible-playbooks`, verified locally, copied to NAS and
-  OneDrive, and validated with `restore_mode=validate`.
+- Home Assistant: the regular backup
+  `homeassistant_backup_20260804T010003.tar.gz` contains
+  `backup-manifest.json`, was copied to NAS and OneDrive, passes `validate`,
+  and passes `portable_test`.
 - Home Assistant replacement drill: `docker/restore-drill.sh --service
   homeassistant --reset-vm-target` successfully repeated reset, install plan,
   and install without startup in the `restore-drill` VM for
-  `homeassistant_backup_20260803T204459.tar.gz`. The restored Compose services
+  `homeassistant_backup_20260804T010003.tar.gz`. The restored Compose services
   are `homeassistant`, `mosquitto`, and `nodered`; `/etc/localtime` and
   `/run/dbus` replacement-host runtime requirements were present; no containers
   were started.
-- XMLTV: a fresh manifest backup, `xmltv_backup_20260802T224938.tar.gz`, passes
-  `validate`, `portable_test`, and `install` plan-only.
+- XMLTV: the regular backup `xmltv_backup_20260804T014002.tar.gz` contains
+  `backup-manifest.json`, was copied to NAS and OneDrive, passes `validate`,
+  and passes `portable_test`.
 
 The newer Home Assistant cron backup
 `homeassistant_backup_20260803T010005.tar.gz` did not contain
 `backup-manifest.json`, so it was skipped by the repeatable KVM drill. The
 production checkout has since been fast-forwarded to the hardened backup code,
-and the replacement backup `homeassistant_backup_20260803T204459.tar.gz`
-contains the portable manifest.
+and the regular backup `homeassistant_backup_20260804T010003.tar.gz` contains
+the portable manifest.
 
 The Paperless database restore test currently reports a PostgreSQL collation
 version warning: the restored database records `2.36`, while the current
