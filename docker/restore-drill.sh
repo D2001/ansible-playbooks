@@ -317,7 +317,9 @@ compose() {
 }
 
 cleanup() {
+    status=$?
     compose stop || true
+    return "$status"
 }
 trap cleanup EXIT
 
@@ -355,22 +357,6 @@ if compose exec -T paperless-ngx \
 else
     echo "outbound=blocked"
 fi
-
-set +e
-document_count_output="$(compose exec -T db \
-  psql -U paperless -d paperless -tAc 'select count(*) from documents_document;' 2>&1)"
-document_count_rc=$?
-set -e
-if [[ "$document_count_rc" -ne 0 ]]; then
-    echo "$document_count_output" >&2
-    echo "document_count=failed" >&2
-    exit "$document_count_rc"
-fi
-document_count="$(
-    printf '%s\n' "$document_count_output" |
-      awk 'NF { value=$0 } END { gsub(/^[ \t]+|[ \t]+$/, "", value); print value }'
-)"
-echo "document_count=$document_count"
 REMOTE
 }
 

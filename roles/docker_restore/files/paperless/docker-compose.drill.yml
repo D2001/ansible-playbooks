@@ -4,6 +4,8 @@
 services:
   paperless-ngx:
     restart: "no"
+    # Keep Paperless reachable only through the drill proxy during restore drills.
+    ports: !reset []
   db:
     restart: "no"
   redis:

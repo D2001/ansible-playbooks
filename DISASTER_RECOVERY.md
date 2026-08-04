@@ -76,8 +76,17 @@ As of 2026-08-04, the current local backups have been verified as follows:
   outbound network access from the Paperless container.
 - Paperless repeatable KVM drill: `docker/restore-drill.sh --service paperless
   --reset-vm-target --drill-start` successfully repeated reset, install plan,
-  install without startup, drill-safe start, HTTP check, document-count check,
-  outbound block, and cleanup in the `restore-drill` VM.
+  install without startup, drill-safe start, HTTP check, restart-policy check,
+  internal-network check, outbound block, and cleanup in the `restore-drill`
+  VM.
+- Paperless PostgreSQL collation maintenance rehearsal: the same backup was
+  restored into the `restore-drill` VM, PostgreSQL was started by itself, and
+  `REINDEX DATABASE paperless;` followed by
+  `ALTER DATABASE paperless REFRESH COLLATION VERSION;` changed the recorded
+  database collation version from `2.36` to `2.41` in about 5 seconds. The
+  post-check reported `2.41`/`2.41`, 390 documents, and 237 migrations. A
+  drill-safe Paperless start after the maintenance reached HTTP 302 through
+  the proxy and all containers became healthy.
 - Home Assistant: the regular backup
   `homeassistant_backup_20260804T010003.tar.gz` contains
   `backup-manifest.json`, was copied to NAS and OneDrive, passes `validate`,
@@ -100,11 +109,61 @@ production checkout has since been fast-forwarded to the hardened backup code,
 and the regular backup `homeassistant_backup_20260804T010003.tar.gz` contains
 the portable manifest.
 
-The Paperless database restore test currently reports a PostgreSQL collation
-version warning: the restored database records `2.36`, while the current
-PostgreSQL image provides `2.41`. Treat this as a post-restore maintenance item.
-Do not blindly refresh the recorded collation version until affected
-collation-dependent objects have been reviewed and rebuilt.
+The Paperless database restore test initially reported a PostgreSQL collation
+version warning: the restored database recorded `2.36`, while the current
+PostgreSQL image provided `2.41`. This was rehearsed successfully in the
+restore VM, but production has not been modified yet.
+
+PostgreSQL documents the safe order as rebuilding affected objects, for
+example with `REINDEX`, then refreshing the recorded collation version with
+`ALTER DATABASE ... REFRESH COLLATION VERSION`. The refresh step only updates
+the catalog metadata; it does not prove that dependent objects were rebuilt.
+Reference:
+<https://www.postgresql.org/docs/current/sql-altercollation.html>
+
+Use this production maintenance sequence for Paperless:
+
+1. Confirm a fresh Paperless backup has completed and passes `validate` plus
+   the Paperless database `test` mode.
+2. Optionally repeat the KVM rehearsal:
+   `./docker/restore-drill.sh --service paperless --reset-vm-target --drill-start`.
+3. Schedule a short Paperless maintenance window.
+4. Stop Paperless application writes while keeping PostgreSQL available:
+
+   ```bash
+   cd /home/karsten/paperless
+   docker compose stop paperless-ngx redis
+   docker compose up -d db
+   ```
+
+5. Verify the mismatch before changing it:
+
+   ```bash
+   docker compose exec -T db psql -U paperless -d paperless -X -A -F '|' \
+     -c "select datcollversion, pg_database_collation_actual_version(oid) as actual from pg_database where datname=current_database();"
+   ```
+
+6. Rebuild indexes, then refresh the recorded database collation version:
+
+   ```bash
+   docker compose exec -T db psql -U paperless -d paperless -v ON_ERROR_STOP=1 \
+     -c "REINDEX DATABASE paperless;" \
+     -c "ALTER DATABASE paperless REFRESH COLLATION VERSION;"
+   ```
+
+7. Re-run the version and count checks:
+
+   ```bash
+   docker compose exec -T db psql -U paperless -d paperless -X -A -F '|' \
+     -c "select datcollversion, pg_database_collation_actual_version(oid) as actual from pg_database where datname=current_database(); select count(*) as documents from documents_document; select count(*) as migrations from django_migrations;"
+   ```
+
+8. Start Paperless again and confirm health:
+
+   ```bash
+   docker compose up -d
+   docker compose ps
+   ```
 
 ## Install on a replacement client
 
