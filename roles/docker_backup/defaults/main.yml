@@ -17,9 +17,15 @@ backup_required_service_entries_map:
   paperless:
     - ".env"
 
+  monitoring:
+    - "secrets/fritz-exporter.env"
+
 backup_sensitive_service_entries_map:
   paperless:
     - ".env"
+
+  monitoring:
+    - "secrets/fritz-exporter.env"
 
 backup_required_service_entries: >-
   {{
