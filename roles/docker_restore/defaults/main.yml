@@ -42,6 +42,13 @@ restore_required_entries_map:
   xmltv:
     - "xmltv/docker-compose.yml"
 
+  sentinel:
+    - "sentinel/docker-compose.yml"
+    - "sentinel/prometheus/prometheus.yml"
+    - "sentinel/prometheus/alerts.yml"
+    - "sentinel/blackbox/blackbox.yml"
+    - "sentinel/alertmanager/alertmanager.yml"
+
 restore_required_entries: >-
   {{
     restore_required_entries_map.get(
