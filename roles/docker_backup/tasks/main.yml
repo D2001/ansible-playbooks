@@ -49,6 +49,7 @@
       - -q
       - "{{ nas_backup_dir | dirname }}"
   changed_when: false
+  when: backup_nas_enabled | bool
 
 - name: Ensure backup directories exist
   ansible.builtin.file:
@@ -57,9 +58,11 @@
     owner: karsten
     group: karsten
     mode: "0755"
-  loop:
-    - "{{ backup_dir }}"
-    - "{{ nas_backup_dir }}"
+  loop: >-
+    {{
+      [backup_dir]
+      + ([nas_backup_dir] if (backup_nas_enabled | bool) else [])
+    }}
 
 - name: Remove stale incomplete local archives
   ansible.builtin.shell: |

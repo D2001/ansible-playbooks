@@ -12,6 +12,11 @@ backup_file: "{{ service_name }}_backup_{{ timestamp }}.tar.gz"
 health_check_retries: 30
 health_check_delay: 10
 
+# Backup destinations.
+# Existing hosts keep their current NAS + OneDrive behavior by default.
+backup_nas_enabled: true
+backup_onedrive_enabled: true
+
 # Files required for a self-contained service restore.
 backup_required_service_entries_map:
   paperless:

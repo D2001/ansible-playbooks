@@ -39,6 +39,7 @@
       args:
         executable: /bin/bash
 
+  when: backup_nas_enabled | bool
   rescue:
     - name: Record NAS upload error
       ansible.builtin.set_fact:
@@ -89,6 +90,7 @@
       args:
         executable: /bin/bash
 
+  when: backup_onedrive_enabled | bool
   rescue:
     - name: Record OneDrive upload error
       ansible.builtin.set_fact:

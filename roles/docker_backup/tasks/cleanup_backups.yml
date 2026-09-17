@@ -64,7 +64,9 @@
   register: nas_cleanup
   changed_when: nas_cleanup.stdout | length > 0
   failed_when: false
-  when: backup_upload_completed | default(false) | bool
+  when:
+    - backup_upload_completed | default(false) | bool
+    - backup_nas_enabled | bool
 
 - name: Keep configured number of OneDrive backups
   ansible.builtin.shell: |
@@ -90,15 +92,19 @@
   register: onedrive_cleanup
   changed_when: onedrive_cleanup.stdout | length > 0
   failed_when: false
-  when: backup_upload_completed | default(false) | bool
+  when:
+    - backup_upload_completed | default(false) | bool
+    - backup_onedrive_enabled | bool
 
 - name: Display backup retention result
   ansible.builtin.debug:
     msg:
       service: "{{ service_name }}"
       local_keep: "{{ max_local_backups }}"
-      nas_keep: "{{ max_nas_backups }}"
-      onedrive_keep: "{{ max_onedrive_backups }}"
+      nas_enabled: "{{ backup_nas_enabled | bool }}"
+      nas_keep: "{{ max_nas_backups if (backup_nas_enabled | bool) else 'disabled' }}"
+      onedrive_enabled: "{{ backup_onedrive_enabled | bool }}"
+      onedrive_keep: "{{ max_onedrive_backups if (backup_onedrive_enabled | bool) else 'disabled' }}"
       uploads_completed: "{{ backup_upload_completed | default(false) }}"
       local_changed: "{{ local_cleanup.changed | default(false) }}"
       nas_changed: "{{ nas_cleanup.changed | default(false) }}"
