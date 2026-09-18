@@ -1,2 +1,14 @@
 __pycache__/
 *.py[cod]
+
+# Private service configuration and runtime state
+services/**/.env
+services/**/secrets/
+services/**/data/
+services/**/textfile/
+services/**/hass-config/
+services/**/nodered/
+services/**/snmp/snmp.yml
+services/**/scripts/ex4100-health.sh
+*.tar.gz
+*.db

@@ -1,0 +1,17 @@
+[Unit]
+Description=Isolated weekly restore verification of service backups
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+RequiresMountsFor=/mnt/usb
+
+[Service]
+Type=oneshot
+User=karsten
+Group=karsten
+ExecStart=/usr/bin/python3 /home/karsten/scripts/restore-check.py
+TimeoutStartSec=2h
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+UMask=0077

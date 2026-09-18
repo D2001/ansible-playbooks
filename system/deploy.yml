@@ -14,7 +14,7 @@
     mount_paperless: "/mnt/paperless"
     mount_backups: "/mnt/backups"
     mount_public: "/mnt/public"
-    mount_opts: "credentials={{ smb_credentials_path }},uid=1000,gid=1000,file_mode=0770,dir_mode=0770,iocharset=utf8,nounix,noserverino,rw"
+    mount_opts: "credentials={{ smb_credentials_path }},uid=1000,gid=1000,file_mode=0770,dir_mode=0770,iocharset=utf8,nounix,noserverino,rw,_netdev,nofail,x-systemd.automount,x-systemd.mount-timeout=30s"
 
   tasks:
 

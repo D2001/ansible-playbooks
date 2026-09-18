@@ -1,0 +1,173 @@
+#!/usr/bin/env bash
+
+set -u
+set -o pipefail
+
+NAS="192.168.0.7"
+COMMUNITY={{ ex4100_snmp_community | quote }}
+
+OUT="/home/karsten/monitoring/textfile/ex4100-health.prom"
+TMP="${OUT}.tmp"
+
+: > "$TMP"
+
+snmp_value() {
+    timeout 5 snmpget \
+        -v2c \
+        -c "$COMMUNITY" \
+        -Oqv \
+        "$NAS" "$1" 2>/dev/null
+}
+
+clean_string() {
+    sed 's/^"//;s/"$//' | xargs
+}
+
+
+# ------------------------------------------------------------
+# NAS reachable
+# ------------------------------------------------------------
+
+echo "# HELP home_ex4100_up Whether WD EX4100 SNMP is reachable." >> "$TMP"
+echo "# TYPE home_ex4100_up gauge" >> "$TMP"
+
+if snmp_value '.1.3.6.1.2.1.1.3.0' >/dev/null; then
+    echo "home_ex4100_up 1" >> "$TMP"
+else
+    echo "home_ex4100_up 0" >> "$TMP"
+    mv "$TMP" "$OUT"
+    exit 0
+fi
+
+
+# ------------------------------------------------------------
+# System temperature
+# ------------------------------------------------------------
+
+TEMP_RAW=$(snmp_value \
+    '.1.3.6.1.4.1.5127.1.1.1.6.1.7.0' \
+    | clean_string)
+
+TEMP=$(printf '%s\n' "$TEMP_RAW" \
+    | sed -n 's/.*Centigrade:\([0-9][0-9]*\).*/\1/p')
+
+echo "# HELP home_ex4100_temperature_celsius WD EX4100 system temperature." >> "$TMP"
+echo "# TYPE home_ex4100_temperature_celsius gauge" >> "$TMP"
+
+if [[ "$TEMP" =~ ^[0-9]+$ ]]; then
+    echo "home_ex4100_temperature_celsius $TEMP" >> "$TMP"
+fi
+
+
+# ------------------------------------------------------------
+# Fan
+# ------------------------------------------------------------
+
+FAN_RAW=$(snmp_value \
+    '.1.3.6.1.4.1.5127.1.1.1.6.1.8.0' \
+    | clean_string)
+
+echo "# HELP home_ex4100_fan_up WD EX4100 fan state." >> "$TMP"
+echo "# TYPE home_ex4100_fan_up gauge" >> "$TMP"
+
+if printf '%s' "$FAN_RAW" | grep -qi 'running'; then
+    echo "home_ex4100_fan_up 1" >> "$TMP"
+else
+    echo "home_ex4100_fan_up 0" >> "$TMP"
+fi
+
+
+# ------------------------------------------------------------
+# Volume metadata
+# ------------------------------------------------------------
+
+VOLUME=$(snmp_value \
+    '.1.3.6.1.4.1.5127.1.1.1.6.1.9.1.2.1' \
+    | clean_string)
+
+FILESYSTEM=$(snmp_value \
+    '.1.3.6.1.4.1.5127.1.1.1.6.1.9.1.3.1' \
+    | clean_string)
+
+RAID=$(snmp_value \
+    '.1.3.6.1.4.1.5127.1.1.1.6.1.9.1.4.1' \
+    | clean_string)
+
+echo "# HELP home_ex4100_volume_info WD EX4100 volume metadata." >> "$TMP"
+echo "# TYPE home_ex4100_volume_info gauge" >> "$TMP"
+
+printf 'home_ex4100_volume_info{volume="%s",filesystem="%s",raid="%s"} 1\n' \
+    "$VOLUME" "$FILESYSTEM" "$RAID" >> "$TMP"
+
+
+# ------------------------------------------------------------
+# Disks
+# ------------------------------------------------------------
+
+echo "# HELP home_ex4100_disk_present Whether an expected EX4100 disk is reported." >> "$TMP"
+echo "# TYPE home_ex4100_disk_present gauge" >> "$TMP"
+
+echo "# HELP home_ex4100_disk_temperature_celsius EX4100 disk temperature." >> "$TMP"
+echo "# TYPE home_ex4100_disk_temperature_celsius gauge" >> "$TMP"
+
+echo "# HELP home_ex4100_disk_info EX4100 disk information." >> "$TMP"
+echo "# TYPE home_ex4100_disk_info gauge" >> "$TMP"
+
+
+for DISK in 1 2; do
+
+    VENDOR=$(snmp_value \
+        ".1.3.6.1.4.1.5127.1.1.1.6.1.10.1.2.${DISK}" \
+        | clean_string)
+
+    MODEL=$(snmp_value \
+        ".1.3.6.1.4.1.5127.1.1.1.6.1.10.1.3.${DISK}" \
+        | clean_string)
+
+    TEMP_RAW=$(snmp_value \
+        ".1.3.6.1.4.1.5127.1.1.1.6.1.10.1.5.${DISK}" \
+        | clean_string)
+
+    SIZE_RAW=$(snmp_value \
+        ".1.3.6.1.4.1.5127.1.1.1.6.1.10.1.6.${DISK}" \
+        | clean_string)
+
+    TEMP=$(printf '%s\n' "$TEMP_RAW" \
+        | sed -n 's/.*Centigrade:\([0-9][0-9]*\).*/\1/p')
+
+    SIZE_GB=$(printf '%s\n' "$SIZE_RAW" \
+        | sed -n 's/[^0-9]*\([0-9][0-9]*\).*/\1/p')
+
+    if [ -n "$MODEL" ]; then
+
+        echo "home_ex4100_disk_present{disk=\"$DISK\"} 1" >> "$TMP"
+
+        printf 'home_ex4100_disk_info{disk="%s",vendor="%s",model="%s",size_gb="%s"} 1\n' \
+            "$DISK" "$VENDOR" "$MODEL" "$SIZE_GB" >> "$TMP"
+
+        if [[ "$TEMP" =~ ^[0-9]+$ ]]; then
+            echo "home_ex4100_disk_temperature_celsius{disk=\"$DISK\"} $TEMP" >> "$TMP"
+        fi
+
+    else
+        echo "home_ex4100_disk_present{disk=\"$DISK\"} 0" >> "$TMP"
+    fi
+
+done
+
+
+# ------------------------------------------------------------
+# Collector timestamp
+# ------------------------------------------------------------
+
+echo "# HELP home_ex4100_collector_timestamp_seconds Last successful EX4100 collector run." >> "$TMP"
+echo "# TYPE home_ex4100_collector_timestamp_seconds gauge" >> "$TMP"
+
+echo "home_ex4100_collector_timestamp_seconds $(date +%s)" >> "$TMP"
+
+
+# ------------------------------------------------------------
+# Atomic publish
+# ------------------------------------------------------------
+
+mv "$TMP" "$OUT"

@@ -24,6 +24,10 @@ backup_required_service_entries_map:
 
   monitoring:
     - "secrets/fritz-exporter.env"
+    - "home-dashboard/Dockerfile"
+    - "home-dashboard/requirements.txt"
+    - "home-dashboard/app.py"
+    - "home-dashboard/data/events.db"
 
 backup_sensitive_service_entries_map:
   paperless:

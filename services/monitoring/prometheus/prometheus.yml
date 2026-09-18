@@ -1,0 +1,198 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+
+  # Prometheus überwacht sich selbst
+  - job_name: prometheus
+    static_configs:
+      - targets:
+          - 127.0.0.1:9090
+
+  # Raspberry Pi Host-Metriken
+  - job_name: raspberry-pi
+    static_configs:
+      - targets:
+          - 127.0.0.1:9100
+        labels:
+          host: paperless
+          role: infrastructure
+
+  # HTTP Service Monitoring
+  - job_name: http-services
+    metrics_path: /probe
+    params:
+      module:
+        - http_2xx
+
+    static_configs:
+      - targets:
+          - http://192.168.0.199:8123
+        labels:
+          service: Home Assistant
+
+      - targets:
+          - http://192.168.0.199:8000
+        labels:
+          service: Paperless
+
+      - targets:
+          - http://192.168.0.199:1880
+        labels:
+          service: Node-RED
+
+
+    relabel_configs:
+      - source_labels:
+          - __address__
+        target_label: __param_target
+
+      - source_labels:
+          - __param_target
+        target_label: instance
+
+      - target_label: __address__
+        replacement: 127.0.0.1:9115
+
+  - job_name: windows-workstation
+    static_configs:
+      - targets:
+          - 192.168.0.195:9182
+        labels:
+          host: MSI-WORKSTATION
+          role: workstation
+
+  # VPS über WireGuard
+  - job_name: vps
+    static_configs:
+      - targets:
+          - 10.8.0.1:9100
+        labels:
+          host: vps
+          role: server
+
+  # Traefik Metrics auf VPS über WireGuard
+  - job_name: vps-traefik
+    static_configs:
+      - targets:
+          - 10.8.0.1:8082
+        labels:
+          host: vps
+          service: traefik
+
+  - job_name: fritzbox
+    scrape_interval: 30s
+    scrape_timeout: 20s
+    static_configs:
+      - targets:
+          - 127.0.0.1:9787
+        labels:
+          host: router-labor
+          role: router
+
+  - job_name: paperless-external
+    scrape_interval: 30s
+    scrape_timeout: 20s
+    metrics_path: /probe
+    params:
+      module:
+        - http_2xx
+    static_configs:
+      - targets:
+          - https://paperless.karikarstus.de/
+        labels:
+          service: Paperless External
+          role: primary-service
+    relabel_configs:
+      - source_labels:
+          - __address__
+        target_label: __param_target
+      - source_labels:
+          - __param_target
+        target_label: instance
+      - target_label: __address__
+        replacement: 127.0.0.1:9115
+
+  - job_name: ex4100
+    metrics_path: /snmp
+    params:
+      module: [ex4100]
+      auth: [ex4100_v2]
+    static_configs:
+      - targets:
+          - 192.168.0.7
+        labels:
+          host: nas-labor
+          role: storage
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: 127.0.0.1:9116
+
+
+
+  # Internet reachability - independent ICMP targets
+  - job_name: internet-icmp
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    metrics_path: /probe
+    params:
+      module:
+        - icmp
+    static_configs:
+      - targets:
+          - 1.1.1.1
+        labels:
+          service: Cloudflare
+          role: internet
+
+      - targets:
+          - 8.8.8.8
+        labels:
+          service: Google DNS
+          role: internet
+
+    relabel_configs:
+      - source_labels:
+          - __address__
+        target_label: __param_target
+
+      - source_labels:
+          - __param_target
+        target_label: instance
+
+      - target_label: __address__
+        replacement: 127.0.0.1:9115
+
+
+  # Public DNS resolution for Paperless
+  - job_name: paperless-dns
+    scrape_interval: 30s
+    scrape_timeout: 10s
+    metrics_path: /probe
+    params:
+      module:
+        - dns_lookup
+    static_configs:
+      - targets:
+          - 1.1.1.1
+        labels:
+          service: Paperless DNS
+          hostname: paperless.karikarstus.de
+          role: primary-service
+
+    relabel_configs:
+      - source_labels:
+          - __address__
+        target_label: __param_target
+
+      - source_labels:
+          - __param_target
+        target_label: resolver
+
+      - target_label: __address__
+        replacement: 127.0.0.1:9115

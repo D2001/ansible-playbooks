@@ -2,9 +2,27 @@
 - name: Initialize upload error list
   ansible.builtin.set_fact:
     backup_upload_errors: []
+    backup_nas_upload_completed: false
+    backup_onedrive_upload_completed: false
 
 - name: Copy and verify backup on NAS
   block:
+    - name: Verify NAS backup root is mounted before writing
+      ansible.builtin.command:
+        argv:
+          - mountpoint
+          - -q
+          - "{{ nas_backup_dir | dirname }}"
+      changed_when: false
+
+    - name: Ensure mounted NAS backup directory exists
+      ansible.builtin.file:
+        path: "{{ nas_backup_dir }}"
+        state: directory
+        owner: karsten
+        group: karsten
+        mode: "0755"
+
     - name: Copy backup atomically to NAS
       ansible.builtin.shell: |
         set -euo pipefail
@@ -13,6 +31,7 @@
         TARGET="{{ nas_backup_dir }}/{{ backup_file }}"
         PARTIAL="{{ nas_backup_dir }}/.{{ backup_file }}.partial"
 
+        mountpoint -q "{{ nas_backup_dir | dirname }}"
         rm -f -- "$PARTIAL"
 
         cp -- "$SOURCE" "$PARTIAL"
@@ -39,6 +58,10 @@
       args:
         executable: /bin/bash
 
+    - name: Mark NAS upload successful
+      ansible.builtin.set_fact:
+        backup_nas_upload_completed: true
+
   when: backup_nas_enabled | bool
   rescue:
     - name: Record NAS upload error
@@ -53,7 +76,8 @@
                   ansible_failed_result.stderr
                   | default(
                       ansible_failed_result.msg
-                      | default('unknown error')
+                      | default('unknown error', true),
+                    true
                     )
                 )
             ]
@@ -90,6 +114,10 @@
       args:
         executable: /bin/bash
 
+    - name: Mark OneDrive upload successful
+      ansible.builtin.set_fact:
+        backup_onedrive_upload_completed: true
+
   when: backup_onedrive_enabled | bool
   rescue:
     - name: Record OneDrive upload error
@@ -104,7 +132,8 @@
                   ansible_failed_result.stderr
                   | default(
                       ansible_failed_result.msg
-                      | default('unknown error')
+                      | default('unknown error', true),
+                    true
                     )
                 )
             ]

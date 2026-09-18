@@ -88,6 +88,28 @@ def main():
             item["archive_path"] = "binds/" + item["archive_id"]
             external_binds.append(item)
 
+    # Resolve the running image IDs, not mutable local tags that may have been
+    # pulled since the container was started.
+    runtime_images = {}
+    for container in containers:
+        labels = (container.get("Config") or {}).get("Labels") or {}
+        name = labels.get("com.docker.compose.service", "")
+        image_id = container.get("Image", "")
+        if not name or not image_id:
+            continue
+        previous = runtime_images.get(name)
+        if previous and previous["image_id"] != image_id:
+            raise RuntimeError("Mixed running image versions for service " + name)
+        image = json.loads(run("docker", "image", "inspect", image_id))[0]
+        digests = sorted(image.get("RepoDigests") or [])
+        runtime_images[name] = {
+            "image_id": image_id,
+            "repo_digests": digests,
+            "restore_image": digests[0] if digests else "",
+            "architecture": image.get("Architecture", ""),
+            "os": image.get("Os", ""),
+        }
+
     services = {}
     for name, service in (compose.get("services") or {}).items():
         services[name] = {
@@ -95,6 +117,7 @@ def main():
             "platform": service.get("platform", ""),
             "network_mode": service.get("network_mode", ""),
             "privileged": bool(service.get("privileged", False)),
+            **runtime_images.get(name, {}),
         }
 
     manifest = {

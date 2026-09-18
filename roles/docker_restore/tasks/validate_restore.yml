@@ -627,6 +627,24 @@
           - --no-same-permissions
       changed_when: true
 
+    - name: Stage restore image pinning helper
+      ansible.builtin.copy:
+        src: pin_restore_images.py
+        dest: "{{ restore_validation_temp.path }}/pin_restore_images.py"
+        mode: "0700"
+      when: restore_manifest.portable_manifest | default({}, true) | length > 0
+
+    - name: Pin extracted Compose images to recorded runtime versions
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ restore_validation_temp.path }}/pin_restore_images.py"
+          - "{{ restore_validation_temp.path }}/extracted/backup-manifest.json"
+          - "{{ restore_validation_temp.path }}/extracted/{{ service_name }}/docker-compose.yml"
+      register: restore_image_pinning
+      changed_when: (restore_image_pinning.stdout | from_json).pinned_services | length > 0
+      when: restore_manifest.portable_manifest | default({}, true) | length > 0
+
     - name: Validate restored Docker Compose configuration
       ansible.builtin.command:
         argv:
@@ -639,6 +657,38 @@
           - config
           - --quiet
       changed_when: false
+
+    - name: Verify restored dashboard SQLite database and build sources
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - |
+            import pathlib
+            import sqlite3
+            import sys
+            root = pathlib.Path(sys.argv[1])
+            for name in ("Dockerfile", "requirements.txt", "app.py"):
+                if not (root / name).is_file():
+                    raise SystemExit("Missing dashboard build source: " + name)
+            for name in ("templates", "static"):
+                if not (root / name).is_dir():
+                    raise SystemExit("Missing dashboard build directory: " + name)
+            db_path = root / "data/events.db"
+            with sqlite3.connect(db_path.as_uri() + "?mode=ro", uri=True) as db:
+                result = db.execute("PRAGMA integrity_check").fetchall()
+                if result != [("ok",)]:
+                    raise SystemExit("Dashboard SQLite integrity check failed")
+                tables = {row[0] for row in db.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'")}
+                if not {"state", "events"}.issubset(tables):
+                    raise SystemExit("Dashboard database is missing required tables")
+            print("Dashboard SQLite integrity and build sources verified")
+          - "{{ restore_validation_temp.path }}/extracted/{{ service_name }}/home-dashboard"
+      changed_when: false
+      when:
+        - service_name == "monitoring"
+        - "'home-dashboard' in (restore_manifest.portable_manifest | default({}, true)).get('services', {})"
 
     - name: Measure extracted validation data
       ansible.builtin.command:
@@ -669,6 +719,8 @@
           archive_symlinks: "{{ restore_manifest.symlinks }}"
           validation_warnings: "{{ restore_manifest.warnings }}"
           compose_validation: "passed"
+          pinned_services: >-
+            {{ (restore_image_pinning.stdout | default('{"pinned_services": []}') | from_json).pinned_services }}
           temporary_data_retained: >-
             {{ restore_keep_validation_data | bool }}
           temporary_path: >-

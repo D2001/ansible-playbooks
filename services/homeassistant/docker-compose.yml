@@ -1,0 +1,44 @@
+x-logging: &default-logging
+  driver: local
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  homeassistant:
+    logging: *default-logging
+    container_name: homeassistant
+    image: ghcr.io/home-assistant/home-assistant:stable
+    volumes:
+      - ./hass-config:/config
+      - /etc/localtime:/etc/localtime:ro
+      - /run/dbus:/run/dbus:ro
+    restart: unless-stopped
+    privileged: true
+    network_mode: host
+
+  mosquitto:
+    logging: *default-logging
+    container_name: mqtt
+    image: eclipse-mosquitto:latest
+    volumes:
+      - ./mosquitto/config:/mosquitto/config
+      - ./mosquitto/data:/mosquitto/data
+      - ./mosquitto/log:/mosquitto/log
+    restart: unless-stopped
+    network_mode: host
+
+  nodered:
+    logging: *default-logging
+    container_name: nodered
+    image: nodered/node-red
+    environment:
+      - TZ=Europe/Berlin
+    ports:
+      - 1880:1880
+    volumes:
+      - ./nodered:/data
+    depends_on:
+      - homeassistant
+      - mosquitto
+    restart: unless-stopped

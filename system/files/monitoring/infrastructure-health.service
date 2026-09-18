@@ -1,0 +1,11 @@
+[Unit]
+Description=Prometheus infrastructure health collector
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=karsten
+Group=karsten
+ExecStart=/home/karsten/monitoring/scripts/infrastructure-health.sh
+TimeoutStartSec=60

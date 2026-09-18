@@ -42,27 +42,14 @@
   loop: "{{ sensitive_backup_entries.results | default([]) }}"
   when: backup_sensitive_service_entries | length > 0
 
-- name: Verify NAS backup root is mounted
-  ansible.builtin.command:
-    argv:
-      - mountpoint
-      - -q
-      - "{{ nas_backup_dir | dirname }}"
-  changed_when: false
-  when: backup_nas_enabled | bool
-
-- name: Ensure backup directories exist
+# Remote destinations must not prevent creation of the local recovery copy.
+- name: Ensure local backup directory exists
   ansible.builtin.file:
-    path: "{{ item }}"
+    path: "{{ backup_dir }}"
     state: directory
     owner: karsten
     group: karsten
     mode: "0755"
-  loop: >-
-    {{
-      [backup_dir]
-      + ([nas_backup_dir] if (backup_nas_enabled | bool) else [])
-    }}
 
 - name: Remove stale incomplete local archives
   ansible.builtin.shell: |
@@ -178,6 +165,8 @@
     docker_backup_failed: false
     docker_backup_error: ""
     backup_upload_completed: false
+    backup_nas_upload_completed: false
+    backup_onedrive_upload_completed: false
 
 - name: Create Docker backup
   block:
@@ -413,6 +402,8 @@
           community.docker.docker_compose_v2:
             project_src: "{{ service_dir }}"
             state: present
+            wait: true
+            wait_timeout: 180
 
       rescue:
         - name: Start containers using Docker Compose command
@@ -422,6 +413,9 @@
               - compose
               - up
               - -d
+              - --wait
+              - --wait-timeout
+              - "180"
           args:
             chdir: "{{ service_dir }}"
 
@@ -478,6 +472,8 @@
           community.docker.docker_compose_v2:
             project_src: "{{ service_dir }}"
             state: present
+            wait: true
+            wait_timeout: 180
 
       rescue:
         - name: Ensure containers are running using command
@@ -487,6 +483,9 @@
               - compose
               - up
               - -d
+              - --wait
+              - --wait-timeout
+              - "180"
           args:
             chdir: "{{ service_dir }}"
 

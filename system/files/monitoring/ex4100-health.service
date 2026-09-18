@@ -1,0 +1,11 @@
+[Unit]
+Description=Prometheus WD EX4100 health collector
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=karsten
+Group=karsten
+ExecStart=/home/karsten/monitoring/scripts/ex4100-health.sh
+TimeoutStartSec=60

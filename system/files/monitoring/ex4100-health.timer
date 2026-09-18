@@ -1,0 +1,12 @@
+[Unit]
+Description=Run WD EX4100 health collector every five minutes
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+AccuracySec=20s
+Persistent=true
+Unit=ex4100-health.service
+
+[Install]
+WantedBy=timers.target

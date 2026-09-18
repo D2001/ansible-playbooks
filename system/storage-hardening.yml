@@ -1,0 +1,75 @@
+---
+- name: Harden storage dependencies on the existing Raspberry Pi
+  hosts: localhost
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Require existing private SMB credentials
+      ansible.builtin.stat:
+        path: /etc/smb_credentials
+      register: smb_credentials
+    - name: Validate credential permissions
+      ansible.builtin.assert:
+        that:
+          - smb_credentials.stat.exists
+          - smb_credentials.stat.isreg
+          - smb_credentials.stat.mode == '0600'
+    - name: Prepare private staging directory
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: storage-hardening-
+      register: storage_stage
+    - block:
+        - name: Normalize existing fstab without exposing credentials
+          ansible.builtin.command:
+            argv:
+              - python3
+              - "{{ playbook_dir }}/files/storage/normalize-fstab.py"
+              - /etc/fstab
+              - "{{ storage_stage.path }}/fstab"
+          changed_when: false
+        - name: Validate staged fstab
+          ansible.builtin.command:
+            argv: [findmnt, --verify, --tab-file, "{{ storage_stage.path }}/fstab"]
+          changed_when: false
+        - name: Preserve previous fstab in a root-only recovery directory
+          ansible.builtin.file:
+            path: /root/storage-hardening-recovery
+            state: directory
+            mode: '0700'
+        - name: Preserve original fstab once
+          ansible.builtin.copy:
+            src: /etc/fstab
+            dest: /root/storage-hardening-recovery/fstab.original
+            remote_src: true
+            force: false
+            mode: '0600'
+        - name: Install normalized fstab
+          ansible.builtin.copy:
+            src: "{{ storage_stage.path }}/fstab"
+            dest: /etc/fstab
+            remote_src: true
+            mode: '0644'
+          register: fstab_update
+        - name: Create service drop-in directories
+          ansible.builtin.file:
+            path: "/etc/systemd/system/{{ item }}.service.d"
+            state: directory
+            mode: '0755'
+          loop: [docker, paperless]
+        - name: Install storage dependencies
+          ansible.builtin.copy:
+            src: "files/storage/{{ item }}-storage.conf"
+            dest: "/etc/systemd/system/{{ item }}.service.d/storage.conf"
+            mode: '0644'
+          loop: [docker, paperless]
+          register: storage_units
+        - name: Reload unit definitions without restarting running services
+          ansible.builtin.systemd:
+            daemon_reload: true
+          when: fstab_update.changed or storage_units.changed
+      always:
+        - name: Remove private staging files
+          ansible.builtin.file:
+            path: "{{ storage_stage.path }}"
+            state: absent

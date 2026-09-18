@@ -65,7 +65,7 @@
   changed_when: nas_cleanup.stdout | length > 0
   failed_when: false
   when:
-    - backup_upload_completed | default(false) | bool
+    - backup_nas_upload_completed | default(false) | bool
     - backup_nas_enabled | bool
 
 - name: Keep configured number of OneDrive backups
@@ -93,7 +93,7 @@
   changed_when: onedrive_cleanup.stdout | length > 0
   failed_when: false
   when:
-    - backup_upload_completed | default(false) | bool
+    - backup_onedrive_upload_completed | default(false) | bool
     - backup_onedrive_enabled | bool
 
 - name: Display backup retention result
@@ -106,6 +106,8 @@
       onedrive_enabled: "{{ backup_onedrive_enabled | bool }}"
       onedrive_keep: "{{ max_onedrive_backups if (backup_onedrive_enabled | bool) else 'disabled' }}"
       uploads_completed: "{{ backup_upload_completed | default(false) }}"
+      nas_upload_completed: "{{ backup_nas_upload_completed | default(false) }}"
+      onedrive_upload_completed: "{{ backup_onedrive_upload_completed | default(false) }}"
       local_changed: "{{ local_cleanup.changed | default(false) }}"
       nas_changed: "{{ nas_cleanup.changed | default(false) }}"
       onedrive_changed: "{{ onedrive_cleanup.changed | default(false) }}"

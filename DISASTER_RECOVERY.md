@@ -272,3 +272,129 @@ the VM still contains restored service data:
 ```bash
 ./docker/restore-drill.sh --service paperless --drill-start
 ```
+
+
+## Backup destination isolation and monitoring dashboard (2026-09-18)
+
+A local archive is created and the service restarted before remote destinations
+are checked. An unavailable NAS backup mount is recorded as a NAS failure;
+OneDrive is still attempted. A OneDrive failure likewise does not invalidate a
+successful NAS copy. The job returns failure when any enabled destination fails,
+so partial success is never reported as complete success. Remote retention runs
+independently, only after that destination's upload was verified. A missing NAS
+mount is checked before creating its service directory and again before copying.
+
+This isolates the **backup destination**. Services that read application data
+from a NAS (such as Paperless consume/export) still require those source data to
+be available for a complete backup.
+
+The home dashboard now belongs to the main monitoring Compose project. It is
+stopped together with monitoring before backup, so its SQLite database is cold
+when copied. Its build context and database are required archive entries.
+Restoring monitoring also restores and starts/builds the dashboard through the
+same Compose file. New monitoring archives additionally undergo SQLite integrity
+and schema checks during restore validation; older manifests without the dashboard
+remain supported but do not recover it. A fresh build needs registry/package access.
+
+Example isolated reconstruction check:
+
+```sh
+./docker/run-ansible.sh restore.yml -e service_name=monitoring \
+  -e restore_mode=portable_test -e restore_source=local
+```
+
+XMLTV and the DVB-C VM were retired on 2026-09-18. Earlier XMLTV drill notes above
+are historical; XMLTV is no longer in the active backup schedule.
+
+### Verification performed on 2026-09-18
+
+- Isolated fixture with missing NAS mount: local archive and OneDrive upload
+  succeeded; overall backup correctly failed for NAS only; service restarted;
+  no directory was created below the unmounted destination.
+- Isolated fixture with invalid OneDrive remote: local archive and NAS upload
+  succeeded; overall backup correctly failed for OneDrive only; service restarted.
+- Production local monitoring backup `monitoring_backup_20260918T230206.tar.gz`
+  completed, with the dashboard stopped together with the project.
+- SHA-256: `f7129a37832b00bae167310ef65e827d8f84e3603a53b94fa400e2f7f6f2eaaa`.
+- `portable_test` passed, including dashboard SQLite integrity/schema checks and
+  reconstruction into isolated Docker volumes; production volumes were untouched.
+- Dashboard built from archived sources and started against the copied database
+  with `--network none`, no published ports and no restart policy: HTTP health
+  returned 200 and SQLite integrity passed. The test container was removed.
+- Production dashboard health and status API returned HTTP 200 after backup.
+
+
+### Replica verification and host maintenance follow-up
+
+The user explicitly approved exporting the expanded monitoring archive, including
+dashboard data and existing monitoring credentials, to the existing NAS and
+OneDrive destinations for this and future scheduled backups. The archive
+`monitoring_backup_20260918T230206.tar.gz` was copied successfully to both targets.
+A full readback of each target matched its local SHA-256 checksum recorded above.
+The existing nightly backup schedule remains in force without a cloud exclusion.
+
+Storage and update hardening are now described in `system/README.md` and can be
+reapplied using `system/storage-hardening.yml` and `system/update-maintenance.yml`.
+These targeted playbooks supplement the older host deployment; they do not by
+themselves constitute a complete tested bare-metal recovery procedure.
+
+
+### Runtime image versions and recurring verification
+
+New manifests record the actual running container image ID, available repository
+digests, OS and architecture. Archive validation pins the **extracted** Compose
+file to those digests before any application test or installation. Production
+Compose files keep their existing update policy. Legacy archives remain supported
+without retroactively claiming image pinning. Local builds without registry digests
+are reconstructed from archived sources; their image ID is recorded for comparison.
+The dashboard Dockerfile now pins the Python base image by digest, but rebuilding
+local images is not guaranteed to be bit-for-bit identical.
+
+All active Compose services use the Docker `local` logging driver with `max-size`
+10m and `max-file` 3. These limits apply to container stdout/stderr logs, not to
+application log files written into volumes. Backup restart now waits up to 180
+seconds for configured container health checks (or running state if none exists).
+
+`restore-check.timer` runs Sundays at 04:30 with up to ten minutes of jitter and
+persistent catch-up. Each week selects one source, rotating local/NAS/OneDrive.
+It runs portable reconstruction for all three stacks and additionally the isolated
+Paperless PostgreSQL test. These modes do not start the production application or
+modify its volumes. The standard backup wrapper provides serialization with
+backups and updates. Manual checks:
+
+```sh
+/home/karsten/scripts/restore-check.py --plan
+/home/karsten/scripts/restore-check.py --source local
+```
+
+Latest per-source/mode logs and status are under `backups/restore-checks/`.
+Prometheus reads `monitoring/textfile/restore-checks.prom`; Grafana provisions the
+`Restore Verification` dashboard. A failed check preserves its previous success
+timestamp, publishes failure and gives the systemd service a nonzero exit status.
+The scheduler can be reinstalled with `system/restore-checks.yml`.
+
+The user has explicitly approved transferring **all backup archives** to the
+existing backup destinations. This includes Home Assistant, Paperless and Monitoring,
+and applies to subsequent runs; the earlier scope restriction is resolved.
+
+
+### Verification of the next hardening stage (2026-09-18)
+
+- All 13 running service containers were inspected after their backup restart:
+  logging driver `local`, `max-size=10m`, `max-file=3` were active.
+- New Home Assistant and Paperless archives each record three immutable runtime
+  image references. The new Monitoring archive records registry digests for its
+  six external images and the local dashboard image ID.
+- Fresh archives for all three stacks completed and were replicated successfully
+  to the existing NAS and OneDrive targets after explicit approval of all archives.
+- Four restore-image helper tests and three restore-check scheduler/state tests
+  passed, including legacy compatibility, invalid-reference refusal and preservation
+  of the previous success timestamp on failure.
+- The scheduled first weekly check is 2026-09-20 around 04:30 CEST (random jitter).
+
+- The first complete local restore sweep passed all four checks: Home Assistant
+  portable reconstruction, Paperless portable reconstruction, Paperless isolated
+  PostgreSQL startup/SQL validation, and Monitoring portable reconstruction with
+  dashboard SQLite integrity. All checks used the newly versioned archives.
+- The Grafana dashboard was verified in the active `resource` storage table
+  (the legacy `dashboard` table is no longer authoritative on this installation).

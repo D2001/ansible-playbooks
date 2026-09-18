@@ -1,0 +1,29 @@
+---
+- name: Install isolated weekly restore verification
+  hosts: localhost
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Install verification script
+      ansible.builtin.copy:
+        src: files/restore-check.py
+        dest: /home/karsten/scripts/restore-check.py
+        owner: karsten
+        group: karsten
+        mode: '0755'
+    - name: Install verification units
+      ansible.builtin.copy:
+        src: "files/{{ item }}"
+        dest: "/etc/systemd/system/{{ item }}"
+        mode: '0644'
+      loop: [restore-check.service, restore-check.timer]
+      register: restore_check_units
+    - name: Reload verification units
+      ansible.builtin.systemd:
+        daemon_reload: true
+      when: restore_check_units.changed
+    - name: Enable weekly verification
+      ansible.builtin.systemd:
+        name: restore-check.timer
+        state: started
+        enabled: true

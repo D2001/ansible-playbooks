@@ -1,0 +1,148 @@
+auths:
+  ex4100_v2:
+    community: {{ ex4100_snmp_community | to_json }}
+    security_level: noAuthNoPriv
+    auth_protocol: MD5
+    priv_protocol: DES
+    version: 2
+
+modules:
+  ex4100:
+    walk:
+      - 1.3.6.1.2.1.25.2.3
+      - 1.3.6.1.2.1.25.3.3
+      - 1.3.6.1.2.1.2.2
+      - 1.3.6.1.2.1.31.1.1
+      - 1.3.6.1.4.1.2021.4
+      - 1.3.6.1.4.1.2021.10
+
+    metrics:
+      - name: ex4100_hrProcessorLoad
+        oid: 1.3.6.1.2.1.25.3.3.1.2
+        type: gauge
+        help: Processor load percentage.
+        indexes:
+          - labelname: cpu
+            type: gauge
+
+      - name: ex4100_memTotalSwap
+        oid: 1.3.6.1.4.1.2021.4.3
+        type: gauge
+        help: Total swap in kB.
+
+      - name: ex4100_memAvailSwap
+        oid: 1.3.6.1.4.1.2021.4.4
+        type: gauge
+        help: Available swap in kB.
+
+      - name: ex4100_memTotalReal
+        oid: 1.3.6.1.4.1.2021.4.5
+        type: gauge
+        help: Total physical memory in kB.
+
+      - name: ex4100_memAvailReal
+        oid: 1.3.6.1.4.1.2021.4.6
+        type: gauge
+        help: Available physical memory in kB.
+
+      - name: ex4100_memBuffer
+        oid: 1.3.6.1.4.1.2021.4.14
+        type: gauge
+        help: Buffer memory in kB.
+
+      - name: ex4100_memCached
+        oid: 1.3.6.1.4.1.2021.4.15
+        type: gauge
+        help: Cached memory in kB.
+
+      - name: ex4100_laLoadFloat
+        oid: 1.3.6.1.4.1.2021.10.1.6
+        type: gauge
+        help: System load average.
+        indexes:
+          - labelname: load_index
+            type: gauge
+
+      - name: ex4100_hrStorageAllocationUnits
+        oid: 1.3.6.1.2.1.25.2.3.1.4
+        type: gauge
+        help: Storage allocation unit size in bytes.
+        indexes:
+          - labelname: storage_index
+            type: gauge
+        lookups:
+          - labels:
+              - storage_index
+            labelname: storage
+            oid: 1.3.6.1.2.1.25.2.3.1.3
+            type: DisplayString
+
+      - name: ex4100_hrStorageSize
+        oid: 1.3.6.1.2.1.25.2.3.1.5
+        type: gauge
+        help: Storage size in allocation units.
+        indexes:
+          - labelname: storage_index
+            type: gauge
+        lookups:
+          - labels:
+              - storage_index
+            labelname: storage
+            oid: 1.3.6.1.2.1.25.2.3.1.3
+            type: DisplayString
+
+      - name: ex4100_hrStorageUsed
+        oid: 1.3.6.1.2.1.25.2.3.1.6
+        type: gauge
+        help: Used storage in allocation units.
+        indexes:
+          - labelname: storage_index
+            type: gauge
+        lookups:
+          - labels:
+              - storage_index
+            labelname: storage
+            oid: 1.3.6.1.2.1.25.2.3.1.3
+            type: DisplayString
+
+      - name: ex4100_ifOperStatus
+        oid: 1.3.6.1.2.1.2.2.1.8
+        type: gauge
+        help: Interface operational status.
+        indexes:
+          - labelname: if_index
+            type: gauge
+        lookups:
+          - labels:
+              - if_index
+            labelname: interface
+            oid: 1.3.6.1.2.1.31.1.1.1.1
+            type: DisplayString
+
+      - name: ex4100_ifHCInOctets
+        oid: 1.3.6.1.2.1.31.1.1.1.6
+        type: counter
+        help: Interface received octets.
+        indexes:
+          - labelname: if_index
+            type: gauge
+        lookups:
+          - labels:
+              - if_index
+            labelname: interface
+            oid: 1.3.6.1.2.1.31.1.1.1.1
+            type: DisplayString
+
+      - name: ex4100_ifHCOutOctets
+        oid: 1.3.6.1.2.1.31.1.1.1.10
+        type: counter
+        help: Interface transmitted octets.
+        indexes:
+          - labelname: if_index
+            type: gauge
+        lookups:
+          - labels:
+              - if_index
+            labelname: interface
+            oid: 1.3.6.1.2.1.31.1.1.1.1
+            type: DisplayString

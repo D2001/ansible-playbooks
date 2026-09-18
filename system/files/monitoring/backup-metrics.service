@@ -1,0 +1,11 @@
+[Unit]
+Description=Prometheus backup metrics collector
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=karsten
+Group=karsten
+ExecStart=/usr/bin/flock -n /run/lock/backup-metrics.lock /home/karsten/monitoring/scripts/backup-metrics.sh
+TimeoutStartSec=180

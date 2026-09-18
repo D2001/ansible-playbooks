@@ -1,0 +1,27 @@
+modules:
+  http_2xx:
+    prober: http
+    timeout: 10s
+    http:
+      preferred_ip_protocol: ip4
+
+  tcp_connect:
+    prober: tcp
+    timeout: 5s
+
+  icmp:
+    prober: icmp
+    timeout: 5s
+    icmp:
+      preferred_ip_protocol: ip4
+
+
+  dns_lookup:
+    prober: dns
+    timeout: 5s
+    dns:
+      preferred_ip_protocol: ip4
+      query_name: paperless.karikarstus.de
+      query_type: A
+      valid_rcodes:
+        - NOERROR
