@@ -1,400 +1,276 @@
-# Docker Disaster Recovery
+# Raspberry Pi disaster recovery
 
-The backup files are ordinary gzip-compressed tar archives. They are not
-client-side encrypted. Local and NAS copies are written with restrictive file
-permissions; access to remote copies is controlled by the remote provider.
-This is an intentional availability-first choice: recovery does not depend on
-an additional encryption key.
+Current operational runbook, reviewed 2026-09-19. Run commands from
+`/home/karsten/ansible-playbooks` as `karsten` unless stated otherwise.
+[Historical drill evidence](docs/RECOVERY_HISTORY_2026-09-18.md) is retained
+separately; it is not the current service inventory.
 
-## What a portable backup contains
+## Recovery scope and inventory
 
-- the complete Compose service directory, including hidden files;
-- every named Docker volume mounted by the running Compose project;
-- every writable bind mount outside the service directory;
-- `backup-manifest.json`, describing images, mounts and host requirements.
+| Stack | Containers | Data and dependencies |
+| --- | --- | --- |
+| `homeassistant` | Home Assistant, Mosquitto, Node-RED | Service directory with configuration, authentication, MQTT and Node-RED data; host `/etc/localtime`, `/run/dbus`; review hardware/integrations before starting |
+| `paperless` | Paperless-ngx, PostgreSQL 16, Redis 7 | Private `.env`, four mounted named volumes, NAS `/mnt/paperless/consume` and `/mnt/paperless/export` |
+| `monitoring` | Prometheus, Grafana, node-exporter, blackbox, FRITZ exporter, SNMP exporter, home dashboard | Two named volumes, exporter secrets, collector/config files, dashboard source and `home-dashboard/data/events.db` |
 
-Writable bind mounts inside the service directory are already part of the
-service-directory copy. Read-only paths outside it, such as `/etc/localtime`
-and `/run/dbus`, are recorded as requirements of the replacement host.
+There are 13 active containers. XMLTV and the DVB-C VM are retired and must not
+be recreated as part of recovery. The dashboard belongs to the parent Monitoring
+Compose project; do not create a standalone dashboard project. The separate
+`restore-drill` VM remains a disposable test environment.
 
-## Safe verification
+Docker stores its data under `/mnt/usb/docker` on the USB ext4 filesystem.
+The original host is a Raspberry Pi 5 running Debian 12 arm64. Prefer an arm64
+replacement; image digests and device integrations may not work on another
+architecture. The historical replacement drill used Debian 13 arm64.
 
-Archive-only validation:
+Git contains code, Compose snapshots, systemd files and reapplication instructions
+in [services/README.md](services/README.md) and [system/README.md](system/README.md).
+It does not contain application data or plaintext credentials. Stack archives do
+not constitute a host disk image: USB partitioning, boot configuration, network,
+Docker daemon settings, host credentials and system schedules require separate
+provisioning. Complete bare-metal recovery has not yet been rehearsed end to end.
 
-```bash
-ansible-playbook -i inventory docker/restore.yml \
-  -e service_name=paperless \
-  -e restore_mode=validate \
-  -e restore_source=auto
-```
+## Backup locations, schedule and contents
 
-Generic reconstruction test:
+For each `<service>` in `homeassistant`, `paperless`, `monitoring`:
 
-```bash
-ansible-playbook -i inventory docker/restore.yml \
-  -e service_name=paperless \
-  -e restore_mode=portable_test \
-  -e restore_source=auto
-```
+| Destination | Path | Configured retention |
+| --- | --- | --- |
+| Local | `/home/karsten/backups/<service>_backups/` | 3 archives |
+| NAS | `/mnt/backups/<service>/` | 30 archives |
+| OneDrive | `onedrive:backups/<service>_backups` | 7 archives |
 
-Replace `paperless` with `homeassistant` or `xmltv` for those services. The
-portable test creates only isolated temporary volumes when a service has named
-volumes. It does not stop or modify production containers and removes its
-temporary data.
+Archive names are `<service>_backup_YYYYMMDDTHHMMSS.tar.gz`. Retention settings
+are in `docker/backup.yml`; recovery hard links and historical/manual copies can
+make on-disk counts higher. Do not manually prune update-recovery directories
+while investigating a failed update.
 
-Paperless additionally supports an application-aware PostgreSQL test:
+User cron starts Home Assistant at 01:00, Paperless at 01:20 and Monitoring at
+02:00, Europe/Berlin. Root cron runs the guarded updater at 00:00; it first backs
+up all three stacks and aborts updates on any backup/replica failure. The wrapper
+serializes backups, restore checks and the update phase using a shared lock.
 
-```bash
-ansible-playbook -i inventory docker/restore.yml \
-  -e service_name=paperless \
-  -e restore_mode=test \
-  -e restore_source=auto
-```
+Each portable archive contains the complete service directory (including hidden
+files and secrets), mounted named volumes, writable external bind data and
+`backup-manifest.json`. External read-only host paths are requirements, not
+included data. The stack is stopped for a consistent copy, then restarted with
+up to 180 seconds of health/running-state waiting. Monitoring's SQLite database
+is copied cold together with its application sources.
 
-## Current recovery boundary
+Archives are gzip-compressed tar files, **not client-side encrypted**. All three
+stacks are authorized for the existing NAS and OneDrive destinations. Keep
+archives and recovery credentials private; do not commit them to the public repo.
 
-`validate`, `portable_test`, the Paperless database `test` mode, and empty-target
-`install` are hardened. Destructive in-place restore remains intentionally
-disabled. Replacing an existing installation requires a separate, explicit
-cut-over operation.
+A failed NAS destination does not prevent the local archive or OneDrive attempt;
+a failed cloud destination does not invalidate a successful NAS copy. Any enabled
+destination failure still fails the job. Remote retention runs only after that
+destination's verified upload. Paperless's NAS *source data* must still be
+available for a complete backup, even if a backup destination is unavailable.
 
-As of 2026-08-04, the current local backups have been verified as follows:
+## Select and verify a recovery point
 
-- Paperless: the regular backup `paperless_backup_20260804T012002.tar.gz`
-  contains `backup-manifest.json`, was copied to NAS and OneDrive, passes
-  `validate`, and passes the isolated PostgreSQL `test` mode with 390 documents
-  and 237 migrations.
-- Paperless replacement drill: `install` on a fresh Debian 13 arm64 KVM VM with
-  `restore_install_start=false` successfully restored the service directory,
-  four Docker volumes, and two external bind targets. A manual Compose start
-  brought up PostgreSQL, Redis, and Paperless successfully; the web endpoint
-  returned HTTP 302 for the login redirect and the restored database contained
-  390 documents.
-- Paperless drill-safe start: the generated `docker-compose.drill.yml` starts
-  Paperless on an internal Docker network, exposes the login page through a
-  temporary proxy on port 8000, disables restart policies, and blocks direct
-  outbound network access from the Paperless container.
-- Paperless repeatable KVM drill: `docker/restore-drill.sh --service paperless
-  --reset-vm-target --drill-start` successfully repeated reset, install plan,
-  install without startup, drill-safe start, HTTP check, restart-policy check,
-  internal-network check, outbound block, and cleanup in the `restore-drill`
-  VM.
-- Paperless PostgreSQL collation maintenance rehearsal: the same backup was
-  restored into the `restore-drill` VM, PostgreSQL was started by itself, and
-  `REINDEX DATABASE paperless;` followed by
-  `ALTER DATABASE paperless REFRESH COLLATION VERSION;` changed the recorded
-  database collation version from `2.36` to `2.41` in about 5 seconds. The
-  post-check reported `2.41`/`2.41`, 390 documents, and 237 migrations. A
-  drill-safe Paperless start after the maintenance reached HTTP 302 through
-  the proxy and all containers became healthy.
-- Paperless production PostgreSQL collation maintenance: after creating and
-  validating `paperless_backup_20260804T210244.tar.gz`, the production
-  Paperless application and Redis containers were stopped while PostgreSQL
-  remained healthy. `REINDEX DATABASE paperless;` followed by
-  `ALTER DATABASE paperless REFRESH COLLATION VERSION;` completed in about 6
-  seconds. The post-check reported `2.41`/`2.41`, 390 documents, and 237
-  migrations, and the Paperless, PostgreSQL, and Redis containers returned to
-  healthy status.
-- Home Assistant: the regular backup
-  `homeassistant_backup_20260804T010003.tar.gz` contains
-  `backup-manifest.json`, was copied to NAS and OneDrive, passes `validate`,
-  and passes `portable_test`.
-- Home Assistant replacement drill: `docker/restore-drill.sh --service
-  homeassistant --reset-vm-target` successfully repeated reset, install plan,
-  and install without startup in the `restore-drill` VM for
-  `homeassistant_backup_20260804T010003.tar.gz`. The restored Compose services
-  are `homeassistant`, `mosquitto`, and `nodered`; `/etc/localtime` and
-  `/run/dbus` replacement-host runtime requirements were present; no containers
-  were started.
-- XMLTV: the regular backup `xmltv_backup_20260804T014002.tar.gz` contains
-  `backup-manifest.json`, was copied to NAS and OneDrive, passes `validate`,
-  and passes `portable_test`.
-
-The newer Home Assistant cron backup
-`homeassistant_backup_20260803T010005.tar.gz` did not contain
-`backup-manifest.json`, so it was skipped by the repeatable KVM drill. The
-production checkout has since been fast-forwarded to the hardened backup code,
-and the regular backup `homeassistant_backup_20260804T010003.tar.gz` contains
-the portable manifest.
-
-The Paperless database restore test initially reported a PostgreSQL collation
-version warning: the restored database recorded `2.36`, while the current
-PostgreSQL image provided `2.41`. This was rehearsed successfully in the
-restore VM and completed in production on 2026-08-04.
-
-PostgreSQL documents the safe order as rebuilding affected objects, for
-example with `REINDEX`, then refreshing the recorded collation version with
-`ALTER DATABASE ... REFRESH COLLATION VERSION`. The refresh step only updates
-the catalog metadata; it does not prove that dependent objects were rebuilt.
-Reference:
-<https://www.postgresql.org/docs/current/sql-altercollation.html>
-
-Use this production maintenance sequence for Paperless:
-
-1. Confirm a fresh Paperless backup has completed and passes `validate` plus
-   the Paperless database `test` mode.
-2. Optionally repeat the KVM rehearsal:
-   `./docker/restore-drill.sh --service paperless --reset-vm-target --drill-start`.
-3. Schedule a short Paperless maintenance window.
-4. Stop Paperless application writes while keeping PostgreSQL available:
-
-   ```bash
-   cd /home/karsten/paperless
-   docker compose stop paperless-ngx redis
-   docker compose up -d db
-   ```
-
-5. Verify the mismatch before changing it:
-
-   ```bash
-   docker compose exec -T db psql -U paperless -d paperless -X -A -F '|' \
-     -c "select datcollversion, pg_database_collation_actual_version(oid) as actual from pg_database where datname=current_database();"
-   ```
-
-6. Rebuild indexes, then refresh the recorded database collation version:
-
-   ```bash
-   docker compose exec -T db psql -U paperless -d paperless -v ON_ERROR_STOP=1 \
-     -c "REINDEX DATABASE paperless;" \
-     -c "ALTER DATABASE paperless REFRESH COLLATION VERSION;"
-   ```
-
-7. Re-run the version and count checks:
-
-   ```bash
-   docker compose exec -T db psql -U paperless -d paperless -X -A -F '|' \
-     -c "select datcollversion, pg_database_collation_actual_version(oid) as actual from pg_database where datname=current_database(); select count(*) as documents from documents_document; select count(*) as migrations from django_migrations;"
-   ```
-
-8. Start Paperless again and confirm health:
-
-   ```bash
-   docker compose up -d
-   docker compose ps
-   ```
-
-## Install on a replacement client
-
-The install mode restores to the original absolute service path recorded in a
-new backup manifest. For older portable manifests without that field it falls
-back to the configured `service_dir`, currently `/home/karsten/<service>`.
-External writable bind mounts are restored to their original paths as well.
-
-Always run the read-only installation plan first:
-
-```bash
-ansible-playbook -i inventory docker/restore.yml \
-  -e service_name=paperless \
-  -e restore_mode=install \
-  -e restore_source=auto \
-  -e restore_install_plan_only=true \
-  -e '{"restore_install_confirm":"RESTORE paperless"}'
-```
-
-The plan and installation refuse to continue if the service directory, an
-external bind target, or any required Docker volume name is already occupied.
-They also verify required read-only host paths before writing data.
-
-This refusal is expected on the existing production host for Paperless because
-the production Docker volumes already exist. Use a genuinely empty replacement
-host for the full Paperless plan and install test.
-
-On a genuinely empty replacement client, remove the plan-only option:
-
-```bash
-ansible-playbook -i inventory docker/restore.yml \
-  -e service_name=paperless \
-  -e restore_mode=install \
-  -e restore_source=auto \
-  -e '{"restore_install_confirm":"RESTORE paperless"}'
-```
-
-Use `homeassistant` and `RESTORE homeassistant` for the Home Assistant stack.
-Set `restore_install_start=false` to install the files and volumes without
-starting containers. An alternative target is possible through
-`restore_install_target_dir`, but Compose files containing absolute bind paths
-must then be adjusted explicitly before startup.
-
-For a replacement-client rehearsal, use this order:
-
-1. Run `validate` with the intended `restore_source`.
-2. Run `portable_test`.
-3. Run `install` with `restore_install_plan_only=true`.
-4. Run `install` with `restore_install_start=false`.
-5. Inspect the restored Compose files and host bind requirements.
-6. Start the service only after confirming paths, permissions, and network
-   expectations.
-
-For Paperless drills, the install workflow writes
-`docker-compose.drill.yml`. It is not loaded automatically. Use it for a
-controlled test start:
-
-```bash
-cd /home/karsten/paperless
-docker compose -f docker-compose.yml -f docker-compose.drill.yml up -d
-docker compose -f docker-compose.yml -f docker-compose.drill.yml stop
-```
-
-The drill override makes the Paperless Compose network internal, adds a
-temporary proxy for browser access on port 8000, and disables container restart
-policies. This limits outbound network side effects while still letting the
-restored stack start for health and login-page checks.
-
-Do not leave a restored Paperless drill instance running unless external
-integrations have been reviewed. The normal application startup schedules
-background jobs, including mail-account processing.
-
-## Repeatable KVM drill
-
-Use `docker/restore-drill.sh` to repeat the replacement-client drill against
-the dedicated KVM VM. The script starts the VM when needed, syncs this checkout
-and the selected portable backup into the VM, runs the install plan, runs the
-actual install with `restore_install_start=false`, and can run the Paperless
-drill-safe start.
-
-Paperless end-to-end drill on the disposable VM:
-
-```bash
-./docker/restore-drill.sh \
-  --service paperless \
-  --reset-vm-target \
-  --drill-start
-```
-
-`--reset-vm-target` is intentionally explicit. It removes the previous drill
-containers, restored service directory, external bind contents, and Docker
-volumes inside the configured VM based on the backup manifest. It must not be
-used against a production host.
-
-Without `--reset-vm-target`, the script is non-destructive and should fail if
-the VM still contains restored service data:
-
-```bash
-./docker/restore-drill.sh --service paperless --drill-start
-```
-
-
-## Backup destination isolation and monitoring dashboard (2026-09-18)
-
-A local archive is created and the service restarted before remote destinations
-are checked. An unavailable NAS backup mount is recorded as a NAS failure;
-OneDrive is still attempted. A OneDrive failure likewise does not invalidate a
-successful NAS copy. The job returns failure when any enabled destination fails,
-so partial success is never reported as complete success. Remote retention runs
-independently, only after that destination's upload was verified. A missing NAS
-mount is checked before creating its service directory and again before copying.
-
-This isolates the **backup destination**. Services that read application data
-from a NAS (such as Paperless consume/export) still require those source data to
-be available for a complete backup.
-
-The home dashboard now belongs to the main monitoring Compose project. It is
-stopped together with monitoring before backup, so its SQLite database is cold
-when copied. Its build context and database are required archive entries.
-Restoring monitoring also restores and starts/builds the dashboard through the
-same Compose file. New monitoring archives additionally undergo SQLite integrity
-and schema checks during restore validation; older manifests without the dashboard
-remain supported but do not recover it. A fresh build needs registry/package access.
-
-Example isolated reconstruction check:
+Use the wrapper rather than calling the Docker playbooks directly so production
+operations share the lock. The following modes do not replace production data:
 
 ```sh
-./docker/run-ansible.sh restore.yml -e service_name=monitoring \
+./docker/run-ansible.sh restore.yml -e service_name=paperless \
+  -e restore_mode=validate -e restore_source=local
+./docker/run-ansible.sh restore.yml -e service_name=paperless \
   -e restore_mode=portable_test -e restore_source=local
+./docker/run-ansible.sh restore.yml -e service_name=paperless \
+  -e restore_mode=test -e restore_source=local
 ```
 
-XMLTV and the DVB-C VM were retired on 2026-09-18. Earlier XMLTV drill notes above
-are historical; XMLTV is no longer in the active backup schedule.
+Use `homeassistant` or `monitoring` for the first two commands. `test` is
+Paperless-only: it starts an isolated PostgreSQL instance and runs SQL checks.
+`portable_test` reconstructs files/temporary volumes without starting the complete
+application. Monitoring validation also checks dashboard SQLite integrity/schema.
+Validation uses temporary disk space and Docker tooling; it is not a zero-write
+operation, even though production service data is untouched.
 
-### Verification performed on 2026-09-18
+Sources are `local`, `nas`, `onedrive`, or `auto`. `auto` selects the newest
+available candidate by filename timestamp (ties prefer local, then NAS, then
+OneDrive); it does not establish that this is the desired pre-incident state.
+Use an explicit source and `-e restore_file=<archive-basename>` to hold the same
+recovery point across validation, plan and install. A local/NAS absolute archive
+path is also supported. If validation fails, inspect the error and explicitly
+select a known-good copy; do not assume automatic fallback after corruption.
 
-- Isolated fixture with missing NAS mount: local archive and OneDrive upload
-  succeeded; overall backup correctly failed for NAS only; service restarted;
-  no directory was created below the unmounted destination.
-- Isolated fixture with invalid OneDrive remote: local archive and NAS upload
-  succeeded; overall backup correctly failed for OneDrive only; service restarted.
-- Production local monitoring backup `monitoring_backup_20260918T230206.tar.gz`
-  completed, with the dashboard stopped together with the project.
-- SHA-256: `f7129a37832b00bae167310ef65e827d8f84e3603a53b94fa400e2f7f6f2eaaa`.
-- `portable_test` passed, including dashboard SQLite integrity/schema checks and
-  reconstruction into isolated Docker volumes; production volumes were untouched.
-- Dashboard built from archived sources and started against the copied database
-  with `--network none`, no published ports and no restart policy: HTTP health
-  returned 200 and SQLite integrity passed. The test container was removed.
-- Production dashboard health and status API returned HTTP 200 after backup.
+New manifests record actual image IDs, registry digests and architecture.
+Validation pins extracted Compose image references to recorded digests before
+test/install. Legacy archives may lack version pinning. Locally built dashboard
+images are rebuilt from archived source and a pinned Python base; a byte-identical
+build is not guaranteed. Images themselves are not saved in the tar archive:
+registry/package access or an independently populated image cache is required.
 
+## Prepare an empty replacement host
 
-### Replica verification and host maintenance follow-up
+1. Fence the failed/original host so two Home Assistant or Paperless instances
+   cannot run automations, consume documents or process mail simultaneously.
+   Keep backup/update cron and recurring restore timers disabled during recovery.
+2. Provision Debian arm64 and user `karsten` (UID/GID 1000), sudo access and the
+   expected network/DNS/timezone. Clone this repository at the original path.
+   Have the Ansible Vault password, current SMB and rclone credentials available
+   independently of the failed SD card. Existing Vault files may be older than
+   live credentials; verify access rather than assuming they are current.
+3. Install Docker Engine with Compose v2, Ansible and the collections used by this
+   repository (`community.docker`, `community.general`), Python with PyYAML,
+   rclone, CIFS tools, `pigz`, `moreutils` (`ts`) and `flock`. Ensure `karsten` can
+   access Docker and the required sudo operations. The older `system/deploy.yml`
+   is a provisioning aid, not a tested one-command restoration of the current host.
+4. Prepare/mount the intended USB filesystem at `/mnt/usb` using its actual UUID.
+   Do not format an existing recovery disk. Configure `/etc/docker/daemon.json`
+   with `"data-root": "/mnt/usb/docker"`, merging any other required settings,
+   before restoring volumes. Never start Docker against an unmounted fallback
+   directory. An existing USB Docker data directory is not an empty target.
+5. Restore `/etc/smb_credentials` with mode 0600 and private rclone configuration
+   for `karsten`. Restore WireGuard/network configuration if needed for access.
+   Configure the NAS shares and USB fstab entry, then apply:
 
-The user explicitly approved exporting the expanded monitoring archive, including
-dashboard data and existing monitoring credentials, to the existing NAS and
-OneDrive destinations for this and future scheduled backups. The archive
-`monitoring_backup_20260918T230206.tar.gz` was copied successfully to both targets.
-A full readback of each target matched its local SHA-256 checksum recorded above.
-The existing nightly backup schedule remains in force without a cloud exclusion.
+   ```sh
+   ansible-playbook system/storage-hardening.yml
+   ```
 
-Storage and update hardening are now described in `system/README.md` and can be
-reapplied using `system/storage-hardening.yml` and `system/update-maintenance.yml`.
-These targeted playbooks supplement the older host deployment; they do not by
-themselves constitute a complete tested bare-metal recovery procedure.
+   This requires an existing ext4 USB entry by UUID. It installs Docker/Paperless
+   dependencies and NAS automount definitions; it does not mount/restart existing
+   services. On the empty host activate the mounts before starting Docker. Verify
+   `mountpoint -q /mnt/usb`, `docker info --format '{{.DockerRootDir}}'` and
+   `findmnt -rn -t cifs --mountpoint /mnt/paperless` before installing Paperless.
+6. Obtain the selected archive from the chosen source and run validation/tests.
+   Allow space for the archive, extracted validation copy and restored volumes;
+   compressed archive size alone is insufficient. Review the manifest's host
+   paths and hardware requirements before continuing.
 
+The three NAS shares map to `//nas-labor.fritz.box/paperless`,
+`//nas-labor.fritz.box/backups` and `//nas-labor.fritz.box/Public` at
+`/mnt/paperless`, `/mnt/backups` and `/mnt/public`. Backup/Public automount
+configuration was installed on 2026-09-18 but its boot behavior has not been
+rehearsed. Paperless's automount was activated and tested on the running host.
 
-### Runtime image versions and recurring verification
+## Install without starting applications
 
-New manifests record the actual running container image ID, available repository
-digests, OS and architecture. Archive validation pins the **extracted** Compose
-file to those digests before any application test or installation. Production
-Compose files keep their existing update policy. Legacy archives remain supported
-without retroactively claiming image pinning. Local builds without registry digests
-are reconstructed from archived sources; their image ID is recorded for comparison.
-The dashboard Dockerfile now pins the Python base image by digest, but rebuilding
-local images is not guaranteed to be bit-for-bit identical.
+The example deliberately uses a known tested archive. Select the required
+recovery point first; it may be a different file or source by the time of an
+incident. Run both commands only on the intended replacement host:
 
-All active Compose services use the Docker `local` logging driver with `max-size`
-10m and `max-file` 3. These limits apply to container stdout/stderr logs, not to
-application log files written into volumes. Backup restart now waits up to 180
-seconds for configured container health checks (or running state if none exists).
+```sh
+./docker/run-ansible.sh restore.yml -e service_name=paperless \
+  -e restore_mode=install -e restore_source=local \
+  -e restore_file=paperless_backup_20260918T233043.tar.gz \
+  -e restore_install_plan_only=true -e restore_install_start=false \
+  -e '{"restore_install_confirm":"RESTORE paperless"}'
 
-`restore-check.timer` runs Sundays at 04:30 with up to ten minutes of jitter and
-persistent catch-up. Each week selects one source, rotating local/NAS/OneDrive.
-It runs portable reconstruction for all three stacks and additionally the isolated
-Paperless PostgreSQL test. These modes do not start the production application or
-modify its volumes. The standard backup wrapper provides serialization with
-backups and updates. Manual checks:
+./docker/run-ansible.sh restore.yml -e service_name=paperless \
+  -e restore_mode=install -e restore_source=local \
+  -e restore_file=paperless_backup_20260918T233043.tar.gz \
+  -e restore_install_start=false \
+  -e '{"restore_install_confirm":"RESTORE paperless"}'
+```
+
+Repeat for the other stacks with their own archive and matching `RESTORE
+homeassistant` / `RESTORE monitoring` confirmation. The role's default is to
+start containers: explicitly keep `restore_install_start=false` until cut-over.
+
+Installation restores original absolute paths from the manifest. It requires
+absent/empty service and external bind directories and refuses existing required
+Docker volume names. The plan does not install application data, but does download/
+extract/validate as needed. Destructive in-place replacement is disabled.
+
+**If the NAS survived and consume/export already contain files, Paperless install
+will refuse those nonempty targets. Do not empty the NAS merely to pass this
+check.** Reconcile surviving data and prepare an isolated empty destination or an
+explicit cut-over plan. Changing `restore_install_target_dir` only relocates the
+service directory; it does not rewrite absolute external bind paths. The role can
+create external bind directories, so independently confirm the CIFS mount to
+avoid restoring NAS data onto the SD card.
+
+## Cut-over and restore host automation
+
+Inspect restored Compose files, secrets, ownership, mounts, image digests and
+hardware dependencies. Start one stack at a time from its original directory:
+
+```sh
+cd /home/karsten/paperless
+docker compose config --quiet
+docker compose up -d --wait --wait-timeout 180
+docker compose ps
+```
+
+Repeat from `/home/karsten/homeassistant` and `/home/karsten/monitoring`; use
+`docker compose up -d --build --wait --wait-timeout 180` for Monitoring when its
+local dashboard image needs building. Keep pinned restore versions during
+acceptance rather than immediately updating tags.
+
+Check Paperless login (HTTP 302 redirect can be normal), document access and DB
+counts against the selected backup; check Home Assistant integrations, MQTT and
+Node-RED; check Grafana, Prometheus targets and dashboard `/health` (port 3080).
+A running container without a health check is not proof of application recovery.
+
+The stack archives do not install host systemd units or cron. After acceptance:
+
+- Install the Paperless base unit from `system/files/storage/paperless.service`
+  together with its storage drop-in. Install the three collector service/timer
+  pairs from `system/files/monitoring/` into `/etc/systemd/system`, daemon-reload,
+  and enable the Paperless service and collector timers. Restore executable bits
+  on collector scripts. Do not start collectors before their scripts/data exist.
+- Recreate the three user backup cron jobs from the schedule above using
+  `/home/karsten/ansible-playbooks/docker/run-ansible.sh backup.yml -e service_name=<service>`.
+  Preserve unrelated jobs and avoid duplicates.
+- Apply `system/restore-checks.yml` to install/enable recurring verification.
+  Its persistent timer may catch up immediately.
+- Apply `system/update-maintenance.yml` only after successful recovery checks and
+  a fresh backup; it reinstates the midnight update job. Run
+  `sudo /home/karsten/scripts/system-update.sh --check` first after installation.
+- Take fresh backups and confirm all three destinations. Reboot in a maintenance
+  window to verify USB dependency, NAS automounts and service/timer startup.
+
+The updater retains matching pre-update archives and `previous-images.json` in
+private `backups/update-recovery-*` directories. It updates OS packages and
+Paperless images, not Home Assistant/Monitoring images. On failed application
+startup it stops Paperless and retains evidence. It does not automatically undo
+database migrations, image changes or OS packages: use the matching archive and
+an explicit cut-over. All current containers have bounded `local` stdout/stderr
+logs (3 × 10 MB); application files inside volumes are outside those limits.
+
+## Recurring verification and latest evidence
+
+`restore-check.timer`: Sundays at 04:30 Europe/Berlin, random delay up to ten
+minutes, persistent catch-up. Sources rotate by ISO week across local, NAS and
+OneDrive; every run checks all three stacks with `portable_test` and Paperless
+with `test`. A given destination is therefore exercised approximately every three
+weeks. These checks are not a complete application or bare-metal drill.
 
 ```sh
 /home/karsten/scripts/restore-check.py --plan
 /home/karsten/scripts/restore-check.py --source local
+systemctl status restore-check.timer
+journalctl -u restore-check.service --no-pager -n 60
 ```
 
-Latest per-source/mode logs and status are under `backups/restore-checks/`.
-Prometheus reads `monitoring/textfile/restore-checks.prom`; Grafana provisions the
-`Restore Verification` dashboard. A failed check preserves its previous success
-timestamp, publishes failure and gives the systemd service a nonzero exit status.
-The scheduler can be reinstalled with `system/restore-checks.yml`.
+Results/logs: `/home/karsten/backups/restore-checks/`. Metrics:
+`/home/karsten/monitoring/textfile/restore-checks.prom`. Grafana dashboard:
+`Restore Verification` (`/d/restore-verification`). A failure retains the prior
+success timestamp but publishes failure and returns a nonzero service exit code.
 
-The user has explicitly approved transferring **all backup archives** to the
-existing backup destinations. This includes Home Assistant, Paperless and Monitoring,
-and applies to subsequent runs; the earlier scope restriction is resolved.
+All four local checks passed on 2026-09-18 using:
 
+| Stack | Tested archive |
+| --- | --- |
+| Home Assistant | `homeassistant_backup_20260918T232957.tar.gz` |
+| Paperless | `paperless_backup_20260918T233043.tar.gz` |
+| Monitoring | `monitoring_backup_20260918T233349.tar.gz` |
 
-### Verification of the next hardening stage (2026-09-18)
+The isolated Paperless SQL check reported 404 documents and 242 migrations
+for this recovery point; these are historical acceptance values, not a live count.
+These archives were replicated to NAS and OneDrive. An earlier expanded Monitoring
+archive also passed full replica SHA-256 readback and an isolated dashboard startup
+check. The earlier Paperless KVM drill exercised application startup; Home
+Assistant's replacement drill installed without starting integrations. The current
+Monitoring stack has not undergone a complete replacement-host install/start drill.
+See the historical record for the exact scope and PostgreSQL collation rehearsal.
 
-- All 13 running service containers were inspected after their backup restart:
-  logging driver `local`, `max-size=10m`, `max-file=3` were active.
-- New Home Assistant and Paperless archives each record three immutable runtime
-  image references. The new Monitoring archive records registry digests for its
-  six external images and the local dashboard image ID.
-- Fresh archives for all three stacks completed and were replicated successfully
-  to the existing NAS and OneDrive targets after explicit approval of all archives.
-- Four restore-image helper tests and three restore-check scheduler/state tests
-  passed, including legacy compatibility, invalid-reference refusal and preservation
-  of the previous success timestamp on failure.
-- The scheduled first weekly check is 2026-09-20 around 04:30 CEST (random jitter).
-
-- The first complete local restore sweep passed all four checks: Home Assistant
-  portable reconstruction, Paperless portable reconstruction, Paperless isolated
-  PostgreSQL startup/SQL validation, and Monitoring portable reconstruction with
-  dashboard SQLite integrity. All checks used the newly versioned archives.
-- The Grafana dashboard was verified in the active `resource` storage table
-  (the legacy `dashboard` table is no longer authoritative on this installation).
+Cleanup on 2026-09-19 removed retired XMLTV data, obsolete editor binaries,
+Monitoring `.bak` copies and old temporary caches, freeing about 3.4 GiB.
+Active configuration, service data and backup archives were retained; these
+removed artifacts are not recovery prerequisites. The private removal log is
+`/home/karsten/backups/cleanup-20260919.json`.

@@ -1,5 +1,10 @@
 # Ansible Infrastructure & Backup System
 
+> Current recovery procedure (2026-09-19): [DISASTER_RECOVERY.md](DISASTER_RECOVERY.md).
+> Restore defaults to validation, not an interactive or in-place restore.
+> Active stacks are Home Assistant, Paperless and Monitoring; older examples below may name retired services.
+
+
 A comprehensive Ansible-based system for deploying Raspberry Pi infrastructure and managing Docker service backups. This project provides both system deployment capabilities and a robust backup/restore system using a modular role-based architecture.
 
 ## 🏗️ Project Structure

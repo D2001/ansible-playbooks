@@ -1,5 +1,10 @@
 # Docker Service Backup & Restore System (Role-Based Architecture)
 
+> Current recovery procedure (2026-09-19): [../DISASTER_RECOVERY.md](../DISASTER_RECOVERY.md).
+> Restore defaults to validation, not an interactive or in-place restore.
+> Active stacks are Home Assistant, Paperless and Monitoring; older examples below may name retired services.
+
+
 A robust, modular backup and restore system for Docker services using Ansible roles. This system provides automated backups to multiple locations (local, NAS, OneDrive) with different retention policies and seamless restoration capabilities.
 
 ## 🏗️ Architecture
