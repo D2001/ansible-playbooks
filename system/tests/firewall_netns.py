@@ -86,7 +86,23 @@ def main():
         for port in (8000,1880):
             run('iptables', '-t', 'nat', '-A', 'PREROUTING', '-p', 'tcp', '--dport', str(port), '-j', 'DNAT', '--to-destination', f'172.30.0.2:{port}')
             probe('192.168.0.199', port, True)
-        run('ip', 'link', 'set', 'eth1', 'name', 'wg0')
+        # Regression: LAN packets can enter a bridge instead of the address's
+        # original physical interface. Exercise real bridged host and DNAT paths.
+        run('ip', 'link', 'add', 'br0', 'type', 'bridge')
+        run('ip', 'link', 'set', 'eth1', 'master', 'br0')
+        run('ip', 'addr', 'del', '192.168.0.199/24', 'dev', 'eth1')
+        run('ip', 'addr', 'add', '192.168.0.199/24', 'dev', 'br0')
+        run('ip', 'link', 'set', 'br0', 'up')
+        for port in (22,1880,3000,3080,8000,8123,18555):
+            probe('192.168.0.199', port, True)
+        for port in (80,9090,9100):
+            probe('192.168.0.199', port, False)
+        # br0 is a LAN bridge, not a trusted Docker br-<id> interface.
+        run('ip', 'addr', 'add', '198.18.0.1/24', 'dev', 'br0')
+        ns(client, 'ip', 'addr', 'add', '198.18.0.2/24', 'dev', 'client')
+        for port in (22,1880,8000):
+            probe('198.18.0.1', port, False)
+        run('ip', 'link', 'set', 'br0', 'name', 'wg0')
         run('ip', 'addr', 'add', '10.8.0.2/24', 'dev', 'wg0')
         ns(client, 'ip', 'addr', 'add', '10.8.0.3/24', 'dev', 'client')
         for port in (22,3000,3080,8000,8123):

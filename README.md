@@ -160,7 +160,8 @@ bereinigt; die Löschprotokolle liegen privat unter `backups/cleanup-*.json`.
 ## Automatisierung und Wartung
 
 Die Host-Firewall verwaltet IPv4 und IPv6 mit `iptables-nft` und
-`netfilter-persistent`. LAN ist `eth1` / `192.168.0.0/24`, VPN ist `wg0` /
+`netfilter-persistent`. LAN-Eingänge sind `eth1` und `br0` (über `eth0`) /
+`192.168.0.0/24`, VPN ist `wg0` /
 `10.8.0.0/24`. SSH, Home Assistant, Paperless, Grafana und Dashboard sind für LAN
 und VPN freigegeben; Node-RED und go2rtc (18555) nur für LAN. IPv6-Zugriffe sind
 derzeit auf das Link-Local-LAN begrenzt. Prometheus und Exporter sind durch die
