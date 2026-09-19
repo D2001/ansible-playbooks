@@ -213,14 +213,16 @@ The stack archives do not install host systemd units or cron. After acceptance:
   pairs from `system/files/monitoring/` into `/etc/systemd/system`, daemon-reload,
   and enable the Paperless service and collector timers. Restore executable bits
   on collector scripts. Do not start collectors before their scripts/data exist.
-- Recreate the three user backup cron jobs from the schedule above using
-  `/home/karsten/ansible-playbooks/docker/run-ansible.sh backup.yml -e service_name=<service>`.
-  Preserve unrelated jobs and avoid duplicates.
+- Install the schedule units with `system/schedules.yml`. On a replacement host,
+  enable the four timers only after the service directories, mounts and scripts
+  are ready using `-e host_enable_schedules=true`. The additional
+  `host_migrate_schedules` option is intended only for an existing host with the
+  known legacy entries; it is unnecessary when the replacement has empty crontabs.
 - Apply `system/restore-checks.yml` to install/enable recurring verification.
   Its persistent timer may catch up immediately.
 - Apply `system/update-maintenance.yml` only after successful recovery checks and
-  a fresh backup; it reinstates the midnight update job. Run
-  `sudo /home/karsten/scripts/system-update.sh --check` first after installation.
+  a fresh backup. Run `sudo /home/karsten/scripts/system-update.sh --check` before
+  enabling its weekly systemd timer.
 - Take fresh backups and confirm all three destinations. Reboot in a maintenance
   window to verify USB dependency, NAS automounts and service/timer startup.
 

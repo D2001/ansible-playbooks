@@ -1,0 +1,11 @@
+[Unit]
+Description=Back up Home Assistant every night
+
+[Timer]
+OnCalendar=*-*-* 01:00:00
+AccuracySec=1min
+Persistent=true
+Unit=docker-backup@homeassistant.service
+
+[Install]
+WantedBy=timers.target

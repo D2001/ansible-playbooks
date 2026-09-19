@@ -1,0 +1,11 @@
+[Unit]
+Description=Run backed-up system update every Saturday
+
+[Timer]
+OnCalendar=Sat *-*-* 03:30:00
+AccuracySec=1min
+Persistent=true
+Unit=system-update.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,11 @@
+[Unit]
+Description=Back up Paperless every night
+
+[Timer]
+OnCalendar=*-*-* 01:20:00
+AccuracySec=1min
+Persistent=true
+Unit=docker-backup@paperless.service
+
+[Install]
+WantedBy=timers.target

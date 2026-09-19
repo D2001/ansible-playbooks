@@ -180,6 +180,10 @@ Stacks durch. Ein Backup-/Replikationsfehler verhindert das Update. Anschließen
 werden OS-Pakete und Paperless-Images aktualisiert; Home-Assistant- und Monitoring-
 Images werden von diesem Skript nicht automatisch aktualisiert.
 
+Die deklarative Host-Baseline enthält bereits die geplanten Systemd-Timer für
+Backups und den wöchentlichen Update-Lauf. Auf dem laufenden Host bleiben die oben
+aufgeführten Cronjobs aktiv, bis die explizite, gesicherte Migration ausgeführt ist.
+
 Vorherige Paperless-Images und passende Archive werden für eine kontrollierte
 Wiederherstellung festgehalten. Es gibt keinen automatischen Datenbank-Downgrade.
 Der Backup-Wrapper und die Update-Phase verwenden eine gemeinsame Sperre.

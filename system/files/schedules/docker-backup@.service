@@ -1,0 +1,22 @@
+[Unit]
+Description=Create and replicate Docker backup for %i
+Wants=network-online.target
+Requires=docker.service
+After=network-online.target docker.service
+RequiresMountsFor=/mnt/usb
+ConditionFileIsExecutable=/home/karsten/ansible-playbooks/docker/run-ansible.sh
+ConditionPathExists=/home/karsten/%i/docker-compose.yml
+
+[Service]
+Type=oneshot
+User=karsten
+Group=karsten
+WorkingDirectory=/home/karsten/ansible-playbooks
+ExecStart=/home/karsten/ansible-playbooks/docker/run-ansible.sh backup.yml -e service_name=%i
+TimeoutStartSec=2h
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
+
+[Install]
+WantedBy=multi-user.target

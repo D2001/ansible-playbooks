@@ -19,6 +19,7 @@
         state: directory
         prefix: storage-hardening-
       register: storage_stage
+      check_mode: false
     - block:
         - name: Normalize existing fstab without exposing credentials
           ansible.builtin.command:
@@ -28,10 +29,12 @@
               - /etc/fstab
               - "{{ storage_stage.path }}/fstab"
           changed_when: false
+          check_mode: false
         - name: Validate staged fstab
           ansible.builtin.command:
             argv: [findmnt, --verify, --tab-file, "{{ storage_stage.path }}/fstab"]
           changed_when: false
+          check_mode: false
         - name: Preserve previous fstab in a root-only recovery directory
           ansible.builtin.file:
             path: /root/storage-hardening-recovery
@@ -73,3 +76,4 @@
           ansible.builtin.file:
             path: "{{ storage_stage.path }}"
             state: absent
+          check_mode: false

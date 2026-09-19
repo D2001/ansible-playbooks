@@ -114,9 +114,10 @@ Tests with mocked external commands (no host package/container changes):
 
     sudo python3 system/tests/test_system_update.py -v
 
-For installing the script on a replacement host, `update-maintenance.yml` also
-creates its root cron job only if no existing entry calls the script, preserving
-the current schedule without introducing a duplicate.
+`update-maintenance.yml` installs only the script. `schedules.yml` owns the
+reviewable systemd unit and the explicit migration from the current root cron.
+This separation prevents a maintenance-script reinstall from silently changing
+its execution frequency.
 
 Recurring restore checks
 -----------------------
@@ -143,3 +144,38 @@ See [services/README.md](../services/README.md) for the configuration snapshots,
 dashboard sources, monitoring collectors and safe reapplication instructions.
 Private credentials and runtime data are intentionally recovered from backups,
 not from Git; SNMP credentials use parameterized templates.
+
+Host baseline and schedule migration
+------------------------------------
+
+`host-audit.yml` is read-only and checks the current Debian/ARM architecture,
+USB Docker data root, CIFS source mount, private-file modes, Compose projects,
+required units and backup scheduling:
+
+    ansible-playbook system/host-audit.yml
+
+`host-baseline.yml` is the current declarative host entry point. It installs the
+required packages and units, validates live service directories and secrets, and
+includes storage hardening, maintenance, restore checks and schedule definitions.
+It deliberately does not restart Docker after changing `daemon.json` and does not
+copy Vault secrets unless `host_deploy_secrets=true` is explicitly supplied.
+Install its module dependencies first with
+`ansible-galaxy collection install -r system/requirements.yml`.
+
+The backup/update systemd units are installed but the existing cron jobs remain
+active until the one-time migration is explicitly requested:
+
+    ansible-playbook system/host-baseline.yml --check --diff
+    ansible-playbook system/schedules.yml -e host_enable_schedules=true -e host_migrate_schedules=true --check --diff
+    ansible-playbook system/schedules.yml -e host_enable_schedules=true -e host_migrate_schedules=true
+
+The migration preserves both crontabs under `/root/host-baseline-recovery/`,
+removes only the three known backup entries, the backed-up updater and the known
+first-Monday reboot entry, then enables daily backup timers and a Saturday 03:30
+update timer. Unrelated cron entries are retained. Persistent timers can run a
+missed job immediately on activation, so perform the cut-over in a maintenance
+window after checking that no backup or update is already running.
+
+On an empty replacement host there are no legacy entries to remove. Use only
+`-e host_enable_schedules=true`; this starts the timers without rewriting either
+crontab.

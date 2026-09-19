@@ -1,0 +1,15 @@
+[Unit]
+Description=Backed-up Raspberry Pi package and Paperless update
+Wants=network-online.target
+Requires=docker.service
+After=network-online.target docker.service
+RequiresMountsFor=/mnt/usb
+ConditionFileIsExecutable=/home/karsten/scripts/system-update.sh
+
+[Service]
+Type=oneshot
+ExecStart=/home/karsten/scripts/system-update.sh
+TimeoutStartSec=4h
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6

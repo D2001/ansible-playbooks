@@ -1,0 +1,260 @@
+---
+- name: Apply current Raspberry Pi host baseline
+  hosts: localhost
+  become: true
+  gather_facts: true
+  vars:
+    host_deploy_secrets: false
+    host_required_packages:
+      - ansible
+      - avahi-daemon
+      - bluez
+      - cifs-utils
+      - containerd.io
+      - curl
+      - docker-buildx-plugin
+      - docker-ce
+      - docker-ce-cli
+      - docker-compose-plugin
+      - git
+      - libvirt-clients
+      - libvirt-daemon-system
+      - moreutils
+      - pigz
+      - python3-yaml
+      - qemu-system-arm
+      - rsync
+      - wireguard-tools
+    service_directories:
+      - /home/karsten/homeassistant
+      - /home/karsten/paperless
+      - /home/karsten/monitoring
+    monitoring_units:
+      - backup-metrics.service
+      - backup-metrics.timer
+      - ex4100-health.service
+      - ex4100-health.timer
+      - infrastructure-health.service
+      - infrastructure-health.timer
+    monitoring_timers:
+      - backup-metrics.timer
+      - ex4100-health.timer
+      - infrastructure-health.timer
+  tasks:
+    - name: Validate baseline target
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution == 'Debian'
+          - ansible_distribution_major_version == '12'
+          - ansible_architecture == 'aarch64'
+          - ansible_user_id == 'root'
+        fail_msg: "The production baseline targets Debian 12 arm64 through become."
+
+    - name: Configure host timezone
+      community.general.timezone:
+        name: Europe/Berlin
+
+    - name: Ensure APT keyring directory exists
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Install Docker repository signing key
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/debian/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        owner: root
+        group: root
+        mode: '0644'
+      register: docker_repository_key
+
+    - name: Configure Docker Compose package repository
+      ansible.builtin.apt_repository:
+        repo: >-
+          deb [arch=arm64 signed-by=/etc/apt/keyrings/docker.asc]
+          https://download.docker.com/linux/debian bookworm stable
+        filename: docker
+        state: present
+      register: docker_repository
+
+    - name: Install required host packages
+      ansible.builtin.apt:
+        name: "{{ host_required_packages }}"
+        state: present
+        update_cache: "{{ docker_repository.changed or docker_repository_key.changed }}"
+
+    - name: Check for rclone installation
+      ansible.builtin.command: rclone version
+      register: baseline_rclone
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Install distribution rclone when no executable exists
+      ansible.builtin.apt:
+        name: rclone
+        state: present
+      when: baseline_rclone.rc != 0
+
+    - name: Ensure service user can access Docker
+      ansible.builtin.user:
+        name: karsten
+        groups: docker
+        append: true
+
+    - name: Require prepared service directories
+      ansible.builtin.stat:
+        path: "{{ item }}/docker-compose.yml"
+      loop: "{{ service_directories }}"
+      register: service_compose_files
+
+    - name: Validate prepared service directories
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.isreg
+        fail_msg: "Missing live Compose configuration: {{ item.item }}/docker-compose.yml"
+      loop: "{{ service_compose_files.results }}"
+
+    - name: Require mounted USB storage before configuring Docker
+      ansible.builtin.command: mountpoint -q /mnt/usb
+      changed_when: false
+      check_mode: false
+
+    - name: Ensure Docker configuration directory exists
+      ansible.builtin.file:
+        path: /etc/docker
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Install Docker data-root configuration without restarting Docker
+      ansible.builtin.copy:
+        src: files/docker/daemon.json
+        dest: /etc/docker/daemon.json
+        owner: root
+        group: root
+        mode: '0644'
+      register: docker_daemon_configuration
+
+    - name: Warn when Docker restart is needed
+      ansible.builtin.debug:
+        msg: >-
+          Docker daemon configuration changed. Verify /mnt/usb and schedule a
+          controlled Docker restart; this playbook deliberately does not restart it.
+      when: docker_daemon_configuration.changed
+
+    - name: Ensure private configuration directories exist
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "{{ item.owner }}"
+        group: "{{ item.group }}"
+        mode: '0700'
+      loop:
+        - path: /root/.config/rclone
+          owner: root
+          group: root
+        - path: /home/karsten/.config/rclone
+          owner: karsten
+          group: karsten
+        - path: /etc/wireguard
+          owner: root
+          group: root
+
+    - name: Deploy encrypted host secrets when explicitly requested
+      when: host_deploy_secrets | bool
+      block:
+        - name: Install private host configuration
+          ansible.builtin.copy:
+            src: "files/{{ item.src }}"
+            dest: "{{ item.dest }}"
+            owner: "{{ item.owner }}"
+            group: "{{ item.group }}"
+            mode: '0600'
+          loop:
+            - src: smb_credentials
+              dest: /etc/smb_credentials
+              owner: root
+              group: root
+            - src: rclone.conf
+              dest: /home/karsten/.config/rclone/rclone.conf
+              owner: karsten
+              group: karsten
+            - src: rclone.conf
+              dest: /root/.config/rclone/rclone.conf
+              owner: root
+              group: root
+            - src: wg0.conf
+              dest: /etc/wireguard/wg0.conf
+              owner: root
+              group: root
+
+    - name: Inspect required live secrets
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - /etc/smb_credentials
+        - /home/karsten/.config/rclone/rclone.conf
+        - /etc/wireguard/wg0.conf
+      register: baseline_secret_stats
+      no_log: true
+
+    - name: Require existing or explicitly deployed secrets
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.isreg
+          - item.stat.mode == '0600'
+        fail_msg: "A required private host configuration is missing or unsafe."
+      loop: "{{ baseline_secret_stats.results }}"
+      no_log: true
+
+    - name: Install Paperless base service
+      ansible.builtin.copy:
+        src: files/storage/paperless.service
+        dest: /etc/systemd/system/paperless.service
+        owner: root
+        group: root
+        mode: '0644'
+      register: paperless_unit
+
+    - name: Install monitoring collector units
+      ansible.builtin.copy:
+        src: "files/monitoring/{{ item }}"
+        dest: "/etc/systemd/system/{{ item }}"
+        owner: root
+        group: root
+        mode: '0644'
+      loop: "{{ monitoring_units }}"
+      register: baseline_monitoring_units
+
+    - name: Reload installed unit definitions
+      ansible.builtin.systemd:
+        daemon_reload: true
+      when: paperless_unit.changed or baseline_monitoring_units.changed
+
+    - name: Enable core services without restarting them
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        enabled: true
+      loop:
+        - docker.service
+        - paperless.service
+        - wg-quick@wg0.service
+
+    - name: Enable and start monitoring collectors
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        enabled: true
+        state: started
+      loop: "{{ monitoring_timers }}"
+
+- import_playbook: storage-hardening.yml
+- import_playbook: update-maintenance.yml
+- import_playbook: restore-checks.yml
+- import_playbook: schedules.yml

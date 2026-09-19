@@ -19,17 +19,8 @@
         group: karsten
         mode: '0755'
         validate: /bin/bash -n %s
-    - name: Read existing root schedule
-      ansible.builtin.command: crontab -u root -l
-      register: update_crontab
-      changed_when: false
-      failed_when: update_crontab.rc not in [0, 1]
-    - name: Add midnight schedule only if no existing update entry exists
-      ansible.builtin.cron:
-        name: Backed-up system update
-        user: root
-        minute: '0'
-        hour: '0'
-        job: /home/karsten/scripts/system-update.sh >> /var/log/system-update.log 2>&1
-        state: present
-      when: "'/home/karsten/scripts/system-update.sh' not in update_crontab.stdout"
+    - name: Explain schedule ownership
+      ansible.builtin.debug:
+        msg: >-
+          The update entry point is installed. system/schedules.yml owns its
+          weekly systemd timer and the explicit one-time cron migration.

@@ -1,0 +1,226 @@
+---
+- name: Audit the Raspberry Pi host without changing it
+  hosts: localhost
+  become: true
+  gather_facts: true
+  vars:
+    expected_architecture: aarch64
+    expected_docker_root: /mnt/usb/docker
+    expected_projects:
+      homeassistant: /home/karsten/homeassistant
+      paperless: /home/karsten/paperless
+      monitoring: /home/karsten/monitoring
+    expected_active_units:
+      - docker.service
+      - paperless.service
+      - wg-quick@wg0.service
+      - restore-check.timer
+      - backup-metrics.timer
+      - ex4100-health.timer
+      - infrastructure-health.timer
+    private_files:
+      - path: /etc/smb_credentials
+        owner: root
+        mode: '0600'
+      - path: /home/karsten/.config/rclone/rclone.conf
+        owner: karsten
+        mode: '0600'
+  tasks:
+    - name: Validate operating system and architecture
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution == 'Debian'
+          - ansible_distribution_major_version == '12'
+          - ansible_architecture == expected_architecture
+        fail_msg: >-
+          Expected Debian 12 {{ expected_architecture }}, found
+          {{ ansible_distribution }} {{ ansible_distribution_version }}
+          {{ ansible_architecture }}.
+
+    - name: Check USB Docker storage mount
+      ansible.builtin.command: mountpoint -q /mnt/usb
+      changed_when: false
+
+    - name: Read Docker data root
+      ansible.builtin.command:
+        argv: [docker, info, "--format={{ '{{' }}.DockerRootDir{{ '}}' }}"]
+      register: docker_root
+      changed_when: false
+
+    - name: Require Docker to use mounted USB storage
+      ansible.builtin.assert:
+        that:
+          - docker_root.stdout == expected_docker_root
+          - docker_root.stdout.startswith('/mnt/usb/')
+
+    - name: Check Paperless source mount type
+      ansible.builtin.command:
+        argv: [findmnt, -rn, -t, cifs, --mountpoint, /mnt/paperless]
+      changed_when: false
+
+    - name: Inspect private configuration files
+      ansible.builtin.stat:
+        path: "{{ item.path }}"
+      loop: "{{ private_files }}"
+      register: private_file_stats
+      no_log: true
+
+    - name: Validate private configuration ownership and modes
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.isreg
+          - item.stat.pw_name == item.item.owner
+          - item.stat.mode == item.item.mode
+        fail_msg: "Private configuration is missing or has unsafe metadata."
+      loop: "{{ private_file_stats.results }}"
+      no_log: true
+
+    - name: Validate Compose configuration
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - --project-directory
+          - "{{ item.value }}"
+          - config
+          - --quiet
+      loop: "{{ expected_projects | dict2items }}"
+      changed_when: false
+
+    - name: Read declared Compose services
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - --project-directory
+          - "{{ item.value }}"
+          - config
+          - --services
+      loop: "{{ expected_projects | dict2items }}"
+      register: declared_compose_services
+      changed_when: false
+
+    - name: Read running Compose services
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - --project-directory
+          - "{{ item.value }}"
+          - ps
+          - --services
+          - --status
+          - running
+      loop: "{{ expected_projects | dict2items }}"
+      register: running_compose_services
+      changed_when: false
+
+    - name: Require every declared Compose service to be running
+      ansible.builtin.assert:
+        that:
+          - >-
+            item.stdout_lines | difference(
+              running_compose_services.results[index].stdout_lines
+            ) | length == 0
+        fail_msg: >-
+          Project {{ item.item.key }} has declared services that are not running.
+      loop: "{{ declared_compose_services.results }}"
+      loop_control:
+        index_var: index
+
+    - name: Check required units are active
+      ansible.builtin.command:
+        argv: [systemctl, is-active, "{{ item }}"]
+      loop: "{{ expected_active_units }}"
+      changed_when: false
+
+    - name: Check required units are enabled
+      ansible.builtin.command:
+        argv: [systemctl, is-enabled, "{{ item }}"]
+      loop: "{{ expected_active_units }}"
+      changed_when: false
+
+    - name: Read user backup schedule
+      ansible.builtin.command: crontab -u karsten -l
+      register: audit_user_crontab
+      changed_when: false
+      failed_when: audit_user_crontab.rc not in [0, 1]
+
+    - name: Read root maintenance schedule
+      ansible.builtin.command: crontab -u root -l
+      register: audit_root_crontab
+      changed_when: false
+      failed_when: audit_root_crontab.rc not in [0, 1]
+
+    - name: Read installed replacement timers
+      ansible.builtin.command:
+        argv: [systemctl, is-enabled, "{{ item }}"]
+      loop:
+        - homeassistant-backup.timer
+        - paperless-backup.timer
+        - monitoring-backup.timer
+        - system-update.timer
+      register: replacement_timer_status
+      changed_when: false
+      failed_when: false
+
+    - name: Require a schedule for every nightly backup
+      ansible.builtin.assert:
+        that:
+          - >-
+            ('service_name=' ~ item.service) in audit_user_crontab.stdout
+            or replacement_timer_status.results[item.timer_index].rc == 0
+        fail_msg: "No active schedule found for {{ item.service }} backup."
+      loop:
+        - service: homeassistant
+          timer_index: 0
+        - service: paperless
+          timer_index: 1
+        - service: monitoring
+          timer_index: 2
+
+    - name: Require a system update schedule
+      ansible.builtin.assert:
+        that:
+          - >-
+            '/home/karsten/scripts/system-update.sh' in audit_root_crontab.stdout
+            or replacement_timer_status.results[3].rc == 0
+        fail_msg: "No active schedule found for the guarded system update."
+
+    - name: Run existing read-only application health check
+      ansible.builtin.command:
+        argv: [/home/karsten/scripts/system-update.sh, --check]
+      changed_when: false
+
+    - name: Read filesystem capacity
+      ansible.builtin.command:
+        argv: [df, -P, -B1, /, /mnt/usb]
+      register: filesystem_capacity
+      changed_when: false
+
+    - name: Read listening TCP sockets
+      ansible.builtin.command:
+        argv: [ss, -lntH]
+      register: listening_tcp
+      changed_when: false
+
+    - name: Display host audit summary
+      ansible.builtin.debug:
+        msg:
+          distribution: >-
+            {{ ansible_distribution }} {{ ansible_distribution_version }}
+            {{ ansible_architecture }}
+          docker_root: "{{ docker_root.stdout }}"
+          compose_projects: "{{ expected_projects.keys() | list }}"
+          schedule_mode: >-
+            {{
+              'systemd timers'
+              if replacement_timer_status.results[0].rc == 0
+              else 'legacy cron (migration pending)'
+            }}
+          legacy_automatic_reboot: >-
+            {{ '/sbin/reboot' in audit_root_crontab.stdout }}
+          filesystem_capacity: "{{ filesystem_capacity.stdout_lines }}"
+          listening_tcp_socket_count: "{{ listening_tcp.stdout_lines | length }}"
+          changed_host_state: false

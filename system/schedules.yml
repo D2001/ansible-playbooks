@@ -1,0 +1,197 @@
+---
+- name: Install systemd schedules for backups and maintenance
+  hosts: localhost
+  become: true
+  gather_facts: true
+  vars:
+    # The units can be reviewed and installed without changing the currently
+    # active cron schedule. Set this explicitly for the one-time cut-over.
+    host_enable_schedules: false
+    host_migrate_schedules: false
+    schedule_timer_units:
+      - homeassistant-backup.timer
+      - paperless-backup.timer
+      - monitoring-backup.timer
+      - system-update.timer
+    schedule_unit_files:
+      - docker-backup@.service
+      - homeassistant-backup.timer
+      - paperless-backup.timer
+      - monitoring-backup.timer
+      - system-update.service
+      - system-update.timer
+  tasks:
+    - name: Require timer activation for a cron migration
+      ansible.builtin.assert:
+        that:
+          - not (host_migrate_schedules | bool) or (host_enable_schedules | bool)
+        fail_msg: >-
+          Refusing to remove cron entries unless replacement timers are enabled.
+
+    - name: Ensure local host-tool directory exists
+      ansible.builtin.file:
+        path: /usr/local/lib/raspi
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Install legacy schedule filter
+      ansible.builtin.copy:
+        src: files/schedules/filter-legacy-crontab.py
+        dest: /usr/local/lib/raspi/filter-legacy-crontab.py
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Install backup and update units
+      ansible.builtin.copy:
+        src: "files/schedules/{{ item }}"
+        dest: "/etc/systemd/system/{{ item }}"
+        owner: root
+        group: root
+        mode: '0644'
+      loop: "{{ schedule_unit_files }}"
+      register: schedule_units
+
+    - name: Reload systemd after unit installation
+      ansible.builtin.systemd:
+        daemon_reload: true
+      when: schedule_units.changed
+
+    - name: Read current user crontab
+      ansible.builtin.command: crontab -u karsten -l
+      register: user_crontab
+      changed_when: false
+      failed_when: user_crontab.rc not in [0, 1]
+      check_mode: false
+
+    - name: Read current root crontab
+      ansible.builtin.command: crontab -u root -l
+      register: root_crontab
+      changed_when: false
+      failed_when: root_crontab.rc not in [0, 1]
+      check_mode: false
+
+    - name: Calculate user crontab after migration
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ playbook_dir }}/files/schedules/filter-legacy-crontab.py"
+          - --user
+          - karsten
+        stdin: "{{ user_crontab.stdout }}"
+      register: filtered_user_crontab
+      changed_when: false
+      check_mode: false
+
+    - name: Calculate root crontab after migration
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ playbook_dir }}/files/schedules/filter-legacy-crontab.py"
+          - --user
+          - root
+        stdin: "{{ root_crontab.stdout }}"
+      register: filtered_root_crontab
+      changed_when: false
+      check_mode: false
+
+    - name: Show schedule migration preview
+      ansible.builtin.debug:
+        msg:
+          migration_enabled: "{{ host_migrate_schedules | bool }}"
+          timer_activation_enabled: "{{ host_enable_schedules | bool }}"
+          user_filter: "{{ filtered_user_crontab.stderr }}"
+          root_filter: "{{ filtered_root_crontab.stderr }}"
+          timers: "{{ schedule_timer_units }}"
+
+    - name: Replace legacy cron schedules with systemd timers
+      when:
+        - host_migrate_schedules | bool
+        - not ansible_check_mode
+      block:
+        - name: Create private schedule recovery directory
+          ansible.builtin.file:
+            path: /root/host-baseline-recovery
+            state: directory
+            owner: root
+            group: root
+            mode: '0700'
+
+        - name: Preserve pre-migration crontabs
+          ansible.builtin.copy:
+            content: "{{ item.content }}\n"
+            dest: >-
+              /root/host-baseline-recovery/crontab-{{ item.user }}-
+              {{ ansible_date_time.iso8601_basic_short }}
+            owner: root
+            group: root
+            mode: '0600'
+            force: false
+          loop:
+            - user: karsten
+              content: "{{ user_crontab.stdout }}"
+            - user: root
+              content: "{{ root_crontab.stdout }}"
+          no_log: true
+
+        - name: Create temporary filtered crontab files
+          ansible.builtin.tempfile:
+            state: file
+            prefix: "host-baseline-{{ item }}-cron-"
+          loop: [karsten, root]
+          register: schedule_cron_files
+
+        - name: Write filtered crontabs
+          ansible.builtin.copy:
+            content: "{{ item.content }}"
+            dest: "{{ item.path }}"
+            owner: root
+            group: root
+            mode: '0600'
+          loop:
+            - path: "{{ schedule_cron_files.results[0].path }}"
+              content: "{{ filtered_user_crontab.stdout }}\n"
+            - path: "{{ schedule_cron_files.results[1].path }}"
+              content: "{{ filtered_root_crontab.stdout }}\n"
+          no_log: true
+
+        - name: Install filtered user crontab
+          ansible.builtin.command:
+            argv: [crontab, -u, karsten, "{{ schedule_cron_files.results[0].path }}"]
+          changed_when: >-
+            (filtered_user_crontab.stdout | trim) != (user_crontab.stdout | trim)
+
+        - name: Install filtered root crontab
+          ansible.builtin.command:
+            argv: [crontab, -u, root, "{{ schedule_cron_files.results[1].path }}"]
+          changed_when: >-
+            (filtered_root_crontab.stdout | trim) != (root_crontab.stdout | trim)
+
+      always:
+        - name: Remove temporary crontab files
+          ansible.builtin.file:
+            path: "{{ item.path }}"
+            state: absent
+          loop: "{{ schedule_cron_files.results | default([]) }}"
+          no_log: true
+
+    - name: Enable and start configured schedules
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        enabled: true
+        state: started
+      loop: "{{ schedule_timer_units }}"
+      when:
+        - host_enable_schedules | bool
+        - not ansible_check_mode
+
+    - name: Report timer activation in check mode
+      ansible.builtin.debug:
+        msg: >-
+          Check mode: {{ schedule_timer_units | join(', ') }} would be enabled
+          and started after the unit files are installed.
+      when:
+        - host_enable_schedules | bool
+        - ansible_check_mode
