@@ -148,6 +148,11 @@ not from Git; SNMP credentials use parameterized templates.
 Host baseline and schedule migration
 ------------------------------------
 
+Firewall management is described in [FIREWALL.md](FIREWALL.md). Install its tools
+with `ansible-playbook system/firewall.yml`; activation uses a timed trial and
+explicit confirmation after connectivity tests. A baseline reapply does not
+silently replace firewall rules.
+
 `host-audit.yml` is read-only and checks the current Debian/ARM architecture,
 USB Docker data root, CIFS source mount, private-file modes, Compose projects,
 required units and backup scheduling:

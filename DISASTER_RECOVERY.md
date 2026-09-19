@@ -209,6 +209,11 @@ A running container without a health check is not proof of application recovery.
 
 The stack archives do not install host systemd units or cron. After acceptance:
 
+- Reapply host firewall policy using [system/FIREWALL.md](system/FIREWALL.md).
+  First verify LAN interface/subnet, IPv6 addressing and VPN routes on the replacement.
+  Install `iptables-persistent` and use a guarded trial with local console access.
+  Do not restore old Docker NAT/bridge snapshots. Keep Apache disabled.
+
 - Install the Paperless base unit from `system/files/storage/paperless.service`
   together with its storage drop-in. Install the three collector service/timer
   pairs from `system/files/monitoring/` into `/etc/systemd/system`, daemon-reload,

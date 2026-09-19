@@ -145,9 +145,8 @@ unter `/d/restore-verification`.
 - **SSH und VS Code Remote:** Administration und Bearbeitung auf dem Pi.
 - **libvirt/KVM:** Die VM `restore-drill` ist vorhanden und zum Prüfzeitpunkt
   ausgeschaltet. Sie dient isolierten Wiederherstellungsproben.
-- **Apache:** Läuft zusätzlich auf Port 80 mit Default-VHost und DocumentRoot
-  `/var/www/html`. Ein benötigter Anwendungszweck ist bisher nicht belegt.
-  Er gehört nicht zu den drei gesicherten Compose-Projekten.
+- **Apache:** Seit 19. September 2026 gestoppt und deaktiviert. Es war nur der
+  Default-VHost vorhanden; Konfiguration und Paket bleiben für eine Rücknahme erhalten.
 - **Host-Grunddienste:** Unter anderem NetworkManager, Avahi, Bluetooth, Cron,
   Zeitsynchronisation, journald sowie Docker/containerd.
 - **Entwicklungswerkzeuge:** .NET/NuGet und weitere Werkzeuge sind installiert;
@@ -159,6 +158,15 @@ Servicebestand. Veraltete Editor-Versionen, Testreste und temporäre Dateien wur
 bereinigt; die Löschprotokolle liegen privat unter `backups/cleanup-*.json`.
 
 ## Automatisierung und Wartung
+
+Die Host-Firewall verwaltet IPv4 und IPv6 mit `iptables-nft` und
+`netfilter-persistent`. LAN ist `eth1` / `192.168.0.0/24`, VPN ist `wg0` /
+`10.8.0.0/24`. SSH, Home Assistant, Paperless, Grafana und Dashboard sind für LAN
+und VPN freigegeben; Node-RED und go2rtc (18555) nur für LAN. IPv6-Zugriffe sind
+derzeit auf das Link-Local-LAN begrenzt. Prometheus und Exporter sind durch die
+Firewall nur lokal erreichbar; ihre Listen-Adressen sind unverändert.
+Docker-Veröffentlichungen werden zusätzlich in `DOCKER-USER` gefiltert.
+Details, Tests und Rücknahme: [Firewall-Betrieb](system/FIREWALL.md).
 
 Alle Uhrzeiten gelten für `Europe/Berlin`.
 
@@ -277,7 +285,9 @@ docker compose logs --tail=80 home-dashboard
 
 Ein vollständiger Bare-Metal-Wiederaufbau und der Bootpfad mit allen neuen
 Mount-Abhängigkeiten sind noch nicht durchgehend erprobt. Für Monitoring fehlt
-ein kompletter Ersatzhost-Installations-/Starttest. Der Zweck des zusätzlichen
-Apache sollte geklärt werden. Vollständige VPS-/Proxy-/DNS-Konfigurationen sowie
+ein kompletter Ersatzhost-Installations-/Starttest. Die neue Firewall ist mit
+isolierten Pakettests, Live-Dienstprüfungen und Reload geprüft; eine echte
+Neustartprüfung und neue Anmeldung von einem separaten LAN-Gerät stehen noch aus.
+Vollständige VPS-/Proxy-/DNS-Konfigurationen sowie
 Geräte- und Integrationsinventare von Home Assistant sind hier nicht erfasst.
 Diese Grenzen sind bei einer Wiederherstellung zu berücksichtigen.
