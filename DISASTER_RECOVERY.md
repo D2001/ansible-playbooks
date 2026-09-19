@@ -144,9 +144,10 @@ registry/package access or an independently populated image cache is required.
 
 The three NAS shares map to `//nas-labor.fritz.box/paperless`,
 `//nas-labor.fritz.box/backups` and `//nas-labor.fritz.box/Public` at
-`/mnt/paperless`, `/mnt/backups` and `/mnt/public`. Backup/Public automount
-configuration was installed on 2026-09-18 but its boot behavior has not been
-rehearsed. Paperless's automount was activated and tested on the running host.
+`/mnt/paperless`, `/mnt/backups` and `/mnt/public`. The reboot on 2026-09-19
+verified all three automount units and CIFS mounts, USB Docker storage and healthy
+Paperless startup. This test used available USB/NAS storage; behavior during a
+storage outage and full bare-metal recovery remain separate tests.
 
 ## Install without starting applications
 

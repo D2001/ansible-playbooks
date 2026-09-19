@@ -284,11 +284,12 @@ docker compose logs --tail=80 home-dashboard
 
 ## Noch offene Punkte
 
-Ein vollständiger Bare-Metal-Wiederaufbau und der Bootpfad mit allen neuen
-Mount-Abhängigkeiten sind noch nicht durchgehend erprobt. Für Monitoring fehlt
-ein kompletter Ersatzhost-Installations-/Starttest. Die neue Firewall ist mit
-isolierten Pakettests, Live-Dienstprüfungen und Reload geprüft; eine echte
-Neustartprüfung und neue Anmeldung von einem separaten LAN-Gerät stehen noch aus.
+Der Neustart am 19. September 2026 wurde erfolgreich geprüft: Firewall vor Docker,
+USB- und NAS-Mounts, WireGuard, alle 13 Container und Timer sind aktiv; eine neue
+LAN-SSH-Verbindung ist hergestellt. Alle 14 Monitoring-Ziele melden „up“.
+Ein vollständiger Bare-Metal-Wiederaufbau bleibt offen. Für Monitoring fehlt
+ein kompletter Ersatzhost-Installations-/Starttest. Der erfolgreiche Boot mit
+verfügbarem USB/NAS ersetzt keinen Ausfalltest dieser Speichergeräte.
 Vollständige VPS-/Proxy-/DNS-Konfigurationen sowie
 Geräte- und Integrationsinventare von Home Assistant sind hier nicht erfasst.
 Diese Grenzen sind bei einer Wiederherstellung zu berücksichtigen.

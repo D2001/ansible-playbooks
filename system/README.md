@@ -83,8 +83,10 @@ startup. Run after provisioning the basic host and its USB filesystem:
 The playbook reloads definitions without unmounting active shares. Newly introduced
 automounts take effect at boot or through a controlled stop/unmount/start operation.
 On 2026-09-18 the Paperless automount was activated through such a controlled switch.
-Backup and Public mounts remain mounted; their automount configuration is for the
-next boot. Do not restart Docker merely to apply these dependencies.
+On 2026-09-19 a complete reboot verified all three NAS automounts/CIFS mounts,
+USB Docker storage and healthy Paperless startup. The firewall became active
+before Docker. See [FIREWALL.md](FIREWALL.md) for the boot verification record.
+Do not restart Docker merely to apply these dependencies.
 
 Paperless's NAS bind mounts use `create_host_path: false`, preventing Compose from
 creating missing source directories. The original fstab is retained only under

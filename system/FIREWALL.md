@@ -69,8 +69,8 @@ Docker Requires/After netfilter-persistent is installed. Both restore plugins us
 NOFLUSH, and their save operations are disabled to avoid overwriting the policy
 with dynamic snapshots. Reload with `sudo netfilter-persistent reload`.
 Do not use `netfilter-persistent flush` or overwrite the files with iptables-save.
-Dynamic obsolete rules from the old configuration remain in memory until reboot;
-they are no longer present in persistent files.
+Obsolete dynamic rules from the old configuration disappeared during the verified
+reboot on 2026-09-19; only current Docker/libvirt runtime rules were recreated.
 
 For a confirmed change needing emergency recovery, use a local console, restore
 `rules.v4`, `rules.v6`, `netfilter-persistent` and optional `firewall.conf` from the
@@ -96,6 +96,22 @@ Production validation: rollback service successfully restored the old firewall
 and Apache; subsequent trial/confirmation/reload succeeded. All 13 containers
 remained running, all tested local HTTP endpoints succeeded, public Paperless
 returned HTTP 302 and all Prometheus targets reported up at the final check.
-No full host reboot was performed. New physical-LAN SSH access and the full boot
-path require a separate check with local console access available. Home Assistant
-device-specific discovery/camera functions require functional user verification.
+The user confirmed new LAN SSH access after the br0 correction. A full reboot was
+completed and checked on 2026-09-19 at approximately 22:56 Europe/Berlin:
+
+- Boot ID changed from `37239530-94be-46ef-8a86-3e05a583fc16` to
+  `272258b0-1194-4f63-9aa9-3739e77b9d89`.
+- netfilter-persistent became active at 22:53:25, Docker at 22:53:47,
+  and Paperless completed healthy startup at 22:55:30.
+- IPv4/IPv6 policy and DOCKER-USER rules survived the reboot; Apache stayed disabled.
+- USB storage, all three NAS CIFS shares and their automount units were active.
+- All 13 containers ran, configured health checks passed, all 14 Prometheus targets
+  were up, and public Paperless returned HTTP 302.
+- WireGuard had a fresh handshake; a new SSH connection from 192.168.0.195 was
+  established after the boot. systemd reported running, no failed units or pending
+  jobs. Backup/update/restore timers retained their schedules.
+- Host audit passed 23 tasks with changed=0 and failed=0.
+
+This validates the boot with storage/network available, not a missing-storage or
+bare-metal recovery scenario. Home Assistant device-specific discovery/camera
+functions still require functional user verification.
