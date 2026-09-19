@@ -164,11 +164,10 @@ Alle Uhrzeiten gelten für `Europe/Berlin`.
 
 | Auslöser | Aufgabe |
 | --- | --- |
-| Root-Cron täglich 00:00 | `scripts/system-update.sh`: Backups, danach OS-/Paperless-Updates |
-| Benutzer-Cron täglich 01:00 | Home-Assistant-Backup |
-| Benutzer-Cron täglich 01:20 | Paperless-Backup |
-| Benutzer-Cron täglich 02:00 | Monitoring-Backup |
-| Erster Montag im Monat 04:00 | Bereits vorhandener Root-Cron für Neustart |
+| `homeassistant-backup.timer`, täglich 01:00 | Home-Assistant-Backup |
+| `paperless-backup.timer`, täglich 01:20 | Paperless-Backup |
+| `monitoring-backup.timer`, täglich 02:00 | Monitoring-Backup |
+| `system-update.timer`, Samstag 03:30 | `scripts/system-update.sh`: Backups, danach OS-/Paperless-Updates |
 | `infrastructure-health.timer`, jede Minute | Infrastruktur-Metriken |
 | `ex4100-health.timer`, alle 5 Minuten | NAS-Zustand |
 | `backup-metrics.timer`, alle 15 Minuten | Backup-Metriken |
@@ -180,9 +179,10 @@ Stacks durch. Ein Backup-/Replikationsfehler verhindert das Update. Anschließen
 werden OS-Pakete und Paperless-Images aktualisiert; Home-Assistant- und Monitoring-
 Images werden von diesem Skript nicht automatisch aktualisiert.
 
-Die deklarative Host-Baseline enthält bereits die geplanten Systemd-Timer für
-Backups und den wöchentlichen Update-Lauf. Auf dem laufenden Host bleiben die oben
-aufgeführten Cronjobs aktiv, bis die explizite, gesicherte Migration ausgeführt ist.
+Die Backup- und Update-Zeitpläne wurden am 19. September 2026 von Cron auf die
+deklarativen Systemd-Timer migriert. Die vorherigen Crontabs liegen root-only unter
+`/root/host-baseline-recovery/`; der nicht mehr benötigte automatische Monatsneustart
+wurde dabei entfernt.
 
 Vorherige Paperless-Images und passende Archive werden für eine kontrollierte
 Wiederherstellung festgehalten. Es gibt keinen automatischen Datenbank-Downgrade.

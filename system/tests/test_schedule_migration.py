@@ -5,6 +5,7 @@ import unittest
 
 
 SCRIPT = Path(__file__).parents[1] / "files/schedules/filter-legacy-crontab.py"
+PLAYBOOK = Path(__file__).parents[1] / "schedules.yml"
 SPEC = importlib.util.spec_from_file_location("filter_legacy_crontab", SCRIPT)
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
@@ -39,6 +40,16 @@ class ScheduleMigrationTests(unittest.TestCase):
         self.assertEqual(removed, 0)
         self.assertEqual(removed_again, 0)
         self.assertEqual(once, twice)
+
+    def test_first_activation_is_stamped_before_cron_removal(self):
+        playbook = PLAYBOOK.read_text(encoding="utf-8")
+        stamp = playbook.index("name: Suppress catch-up during first timer activation")
+        activation = playbook.index("name: Enable and start configured schedules")
+        cron_removal = playbook.index("name: Replace legacy cron schedules")
+        self.assertLess(stamp, activation)
+        self.assertLess(activation, cron_removal)
+        self.assertIn("stamp-{{ item.item }}", playbook)
+        self.assertIn("host_suppress_initial_catchup: true", playbook)
 
 
 if __name__ == "__main__":

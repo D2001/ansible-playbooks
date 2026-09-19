@@ -91,7 +91,7 @@ creating missing source directories. The original fstab is retained only under
 `/root/storage-hardening-recovery/` with restrictive permissions.
 
 `files/system-update.sh` is the source of `/home/karsten/scripts/system-update.sh`.
-The existing root cron job calls it at midnight. `--check` is read-only. The update
+`system-update.timer` calls it every Saturday at 03:30. `--check` is read-only. The update
 workflow backs up all three active stacks through the regular backup runner first;
 a backup or replica failure aborts updates. It then holds the same global lock as
 backups/restores, pins old Paperless images with local recovery tags, and retains
@@ -115,7 +115,7 @@ Tests with mocked external commands (no host package/container changes):
     sudo python3 system/tests/test_system_update.py -v
 
 `update-maintenance.yml` installs only the script. `schedules.yml` owns the
-reviewable systemd unit and the explicit migration from the current root cron.
+reviewable systemd unit and the explicit migration from the legacy root cron.
 This separation prevents a maintenance-script reinstall from silently changing
 its execution frequency.
 
@@ -162,19 +162,24 @@ copy Vault secrets unless `host_deploy_secrets=true` is explicitly supplied.
 Install its module dependencies first with
 `ansible-galaxy collection install -r system/requirements.yml`.
 
-The backup/update systemd units are installed but the existing cron jobs remain
-active until the one-time migration is explicitly requested:
+The backup/update systemd timers are active on the current host. Audit or reapply
+the baseline with:
 
     ansible-playbook system/host-baseline.yml --check --diff
+
+The one-time migration used these commands and remains available for a host that
+still has the known legacy entries:
+
     ansible-playbook system/schedules.yml -e host_enable_schedules=true -e host_migrate_schedules=true --check --diff
     ansible-playbook system/schedules.yml -e host_enable_schedules=true -e host_migrate_schedules=true
 
 The migration preserves both crontabs under `/root/host-baseline-recovery/`,
 removes only the three known backup entries, the backed-up updater and the known
 first-Monday reboot entry, then enables daily backup timers and a Saturday 03:30
-update timer. Unrelated cron entries are retained. Persistent timers can run a
-missed job immediately on activation, so perform the cut-over in a maintenance
-window after checking that no backup or update is already running.
+update timer. Unrelated cron entries are retained. Before first activation the
+playbook timestamps previously disabled timers to avoid an immediate catch-up of
+jobs that already elapsed on migration day. Later missed runs are caught up through
+`Persistent=true`.
 
 On an empty replacement host there are no legacy entries to remove. Use only
 `-e host_enable_schedules=true`; this starts the timers without rewriting either

@@ -45,10 +45,11 @@ are in `docker/backup.yml`; recovery hard links and historical/manual copies can
 make on-disk counts higher. Do not manually prune update-recovery directories
 while investigating a failed update.
 
-User cron starts Home Assistant at 01:00, Paperless at 01:20 and Monitoring at
-02:00, Europe/Berlin. Root cron runs the guarded updater at 00:00; it first backs
-up all three stacks and aborts updates on any backup/replica failure. The wrapper
-serializes backups, restore checks and the update phase using a shared lock.
+Systemd timers start Home Assistant at 01:00, Paperless at 01:20 and Monitoring at
+02:00, Europe/Berlin. `system-update.timer` runs the guarded updater every Saturday
+at 03:30; it first backs up all three stacks and aborts updates on any backup/replica
+failure. The wrapper serializes backups, restore checks and the update phase using
+a shared lock.
 
 Each portable archive contains the complete service directory (including hidden
 files and secrets), mounted named volumes, writable external bind data and
@@ -107,7 +108,7 @@ registry/package access or an independently populated image cache is required.
 
 1. Fence the failed/original host so two Home Assistant or Paperless instances
    cannot run automations, consume documents or process mail simultaneously.
-   Keep backup/update cron and recurring restore timers disabled during recovery.
+   Keep backup, update and recurring restore timers disabled during recovery.
 2. Provision Debian arm64 and user `karsten` (UID/GID 1000), sudo access and the
    expected network/DNS/timezone. Clone this repository at the original path.
    Have the Ansible Vault password, current SMB and rclone credentials available

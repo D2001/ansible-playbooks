@@ -8,6 +8,10 @@
     # active cron schedule. Set this explicitly for the one-time cut-over.
     host_enable_schedules: false
     host_migrate_schedules: false
+    # Persistent timers normally catch up a missed run as soon as they are
+    # started. Suppress that catch-up only for their first activation during
+    # the cron cut-over; subsequent host downtime is still caught up.
+    host_suppress_initial_catchup: true
     schedule_timer_units:
       - homeassistant-backup.timer
       - paperless-backup.timer
@@ -106,6 +110,42 @@
           root_filter: "{{ filtered_root_crontab.stderr }}"
           timers: "{{ schedule_timer_units }}"
 
+    - name: Inspect timers before activation
+      ansible.builtin.command:
+        argv: [systemctl, is-enabled, "{{ item }}"]
+      loop: "{{ schedule_timer_units }}"
+      register: schedule_timer_state
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      when:
+        - host_enable_schedules | bool
+        - not ansible_check_mode
+
+    - name: Suppress catch-up during first timer activation
+      ansible.builtin.file:
+        path: "/var/lib/systemd/timers/stamp-{{ item.item }}"
+        state: touch
+        owner: root
+        group: root
+        mode: '0644'
+      loop: "{{ schedule_timer_state.results | default([]) }}"
+      when:
+        - host_enable_schedules | bool
+        - host_suppress_initial_catchup | bool
+        - not ansible_check_mode
+        - item.rc != 0
+
+    - name: Enable and start configured schedules
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        enabled: true
+        state: started
+      loop: "{{ schedule_timer_units }}"
+      when:
+        - host_enable_schedules | bool
+        - not ansible_check_mode
+
     - name: Replace legacy cron schedules with systemd timers
       when:
         - host_migrate_schedules | bool
@@ -122,9 +162,7 @@
         - name: Preserve pre-migration crontabs
           ansible.builtin.copy:
             content: "{{ item.content }}\n"
-            dest: >-
-              /root/host-baseline-recovery/crontab-{{ item.user }}-
-              {{ ansible_date_time.iso8601_basic_short }}
+            dest: "/root/host-baseline-recovery/crontab-{{ item.user }}-{{ ansible_date_time.iso8601_basic_short }}"
             owner: root
             group: root
             mode: '0600'
@@ -176,16 +214,6 @@
             state: absent
           loop: "{{ schedule_cron_files.results | default([]) }}"
           no_log: true
-
-    - name: Enable and start configured schedules
-      ansible.builtin.systemd:
-        name: "{{ item }}"
-        enabled: true
-        state: started
-      loop: "{{ schedule_timer_units }}"
-      when:
-        - host_enable_schedules | bool
-        - not ansible_check_mode
 
     - name: Report timer activation in check mode
       ansible.builtin.debug:
