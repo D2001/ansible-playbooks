@@ -1,16 +1,25 @@
 # Home dashboard
 
-The homepage provides a compact logical network overview: Internet/WAN gateway,
+The homepage is built around a connected network map: Internet/WAN gateway,
 LAN members (Pi on eth0, EX4100 and workstation) and the Pi-to-VPS WireGuard path.
+Applications with direct links and current findings sit alongside the map.
+The former domain tiles and detailed backup matrix have been removed. Backups
+are a single status strip; failures still name the affected backup sets.
 Addresses and relationships are documented inventory, not automatic discovery or
 measured physical switch ports. Device badges reuse the existing aggregate health
 states; the router badge refers to its WAN link and the tunnel badge to peer/handshake
-health. No per-device latency or physical link speed is invented.
+health. Internet combines reachability and router telemetry; missing router data
+must not be described as a successful overall Internet check. No per-device latency
+or physical link speed is invented.
 
-System/application details are collapsible; workstation Wake-on-LAN remains
-available on its network card. Backups, findings and history remain accessible.
+System values, dated recent events, the Paperless diagnostic path and 24-hour
+latency charts share one initially collapsed detail section. Its open state persists
+across polling. Workstation Wake-on-LAN remains available on its network card.
+On narrow screens the LAN nodes stack with the Pi immediately above its VPN path.
 Missing values display a dash or unknown status; failed/timed-out status requests
-mark the previous display as stale. Retired XMLTV is no longer named in the summary.
+mark the previous display as stale. Unknown telemetry appears in the findings.
+The frontend uses local CSS, SVG icons and vanilla JavaScript (`static/dashboard.js`),
+with no external assets or new runtime dependencies. The backend API is unchanged.
 
 Frontend checks (Node.js):
 
