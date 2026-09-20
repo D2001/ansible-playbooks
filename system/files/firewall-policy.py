@@ -2,7 +2,7 @@
 """Render host rules; live restore touches only INPUT and DOCKER-USER."""
 import argparse
 
-LAN_INTERFACES = ('eth1', 'br0')
+LAN_INTERFACES = ('eth0',)
 
 def render(ipv6=False, boot=False):
     lan = 'fe80::/64' if ipv6 else '192.168.0.0/24'
@@ -17,7 +17,7 @@ def render(ipv6=False, boot=False):
     if not ipv6:
         lines += ['-A INPUT -i virbr0 -p udp -m multiport --dports 53,67 -j ACCEPT',
                   '-A INPUT -i virbr0 -p tcp --dport 53 -j ACCEPT']
-    # The workstation enters through eth0/br0 even though the host IP is on eth1.
+    # Onboard eth0 is the sole LAN ingress after the USB/bridge retirement.
     for interface in LAN_INTERFACES:
         if ipv6:
             lines += [f'-A INPUT -i {interface} -s fe80::/10 -p udp --sport 547 --dport 546 -j ACCEPT']

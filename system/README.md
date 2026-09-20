@@ -150,6 +150,10 @@ not from Git; SNMP credentials use parameterized templates.
 Host baseline and schedule migration
 ------------------------------------
 
+The current onboard LAN profile and guarded USB-adapter retirement are documented
+in [NETWORK.md](NETWORK.md). The profile snapshot is separate from automatic
+baseline application to avoid interrupting remote access during a routine reapply.
+
 Firewall management is described in [FIREWALL.md](FIREWALL.md). Install its tools
 with `ansible-playbook system/firewall.yml`; activation uses a timed trial and
 explicit confirmation after connectivity tests. A baseline reapply does not

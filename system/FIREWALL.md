@@ -16,13 +16,13 @@ Applied on 2026-09-19. Source: `files/firewall-policy.py`; installer:
 | Prometheus 9090 / exporters | no | no | yes |
 | Apache 80 / retired TVHeadend / Jellyfin | no | no | Apache disabled |
 
-LAN means `eth1` or `br0` and `192.168.0.0/24`, or IPv6 link-local `fe80::/64`.
-The host address and return route are on `eth1`, but packet capture showed the
-workstation's SSH packets entering via `eth0` (enslaved to `br0`). Both LAN ingress
-paths must be allowed. The initial eth1-only policy broke new LAN SSH sessions;
-existing sessions survived via conntrack. Do not infer ingress from the IP address
-assignment or return route. The packet regression test now covers a real LAN bridge
-for host access and Docker DNAT as well as the direct-interface path.
+Since 2026-09-20, LAN means `eth0` and `192.168.0.0/24`, or IPv6 link-local
+`fe80::/64`. The USB interface eth1 and old LAN bridge br0 are disabled and no
+longer allowed by the firewall. See [NETWORK.md](NETWORK.md) for the cutover and
+DHCP identity. Previously, the host IP was on eth1 while packets entered via
+eth0/br0, which caused an initial SSH restriction error. The network is now
+unambiguous. Packet tests cover eth0 ingress, Docker DNAT and blocked retired-br0
+ingress. Docker br-<id> interfaces are distinguished from br0.
 VPN means `wg0` and `10.8.0.0/24`; IPv6 VPN is not configured. No global IPv6
 address was present during deployment. Review these values before replacement
 hardware, interface or subnet changes. Loopback and established/related replies

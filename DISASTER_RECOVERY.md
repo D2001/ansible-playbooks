@@ -111,6 +111,8 @@ registry/package access or an independently populated image cache is required.
    Keep backup, update and recurring restore timers disabled during recovery.
 2. Provision Debian arm64 and user `karsten` (UID/GID 1000), sudo access and the
    expected network/DNS/timezone. Clone this repository at the original path.
+   The current LAN uses onboard eth0 with a cloned DHCP identity; follow
+   [system/NETWORK.md](system/NETWORK.md) for the profile and replacement precautions.
    Have the Ansible Vault password, current SMB and rclone credentials available
    independently of the failed SD card. Existing Vault files may be older than
    live credentials; verify access rather than assuming they are current.

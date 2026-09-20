@@ -1,6 +1,6 @@
 # Infrastruktur: Raspberry Pi, Services und Wiederherstellung
 
-Stand: **19. September 2026**. Dieses Repository dokumentiert und verwaltet die
+Stand: **20. September 2026**. Dieses Repository dokumentiert und verwaltet die
 Infrastruktur auf Karstens Raspberry Pi 5. Die Übersicht basiert auf den aktiven
 Compose-Projekten, Host-Diensten, Mounts und Zeitplänen. Externe Systeme sind hier
 als Abhängigkeiten und Monitoring-Ziele beschrieben; ihre vollständige
@@ -41,7 +41,7 @@ flowchart LR
 | Betriebssystem | Debian GNU/Linux 12 (Bookworm) |
 | Benutzer / Arbeitsverzeichnis | `karsten`, `/home/karsten` |
 | Repository | `/home/karsten/ansible-playbooks`, Branch `main` |
-| Netzwerk | LAN `192.168.0.199`, WireGuard `wg0` mit `10.8.0.2/24` |
+| Netzwerk | LAN `eth0` mit `192.168.0.199`, WireGuard `wg0` mit `10.8.0.2/24` |
 | Zeitzone | `Europe/Berlin` |
 | SD-Karte | Rund 118 GiB; Betriebssystem, Home-Verzeichnis, lokale Backup-Archive |
 | USB-Laufwerk | Rund 233 GiB ext4 unter `/mnt/usb` |
@@ -52,6 +52,13 @@ Die Compose-Verzeichnisse liegen unter `/home/karsten`. Dadurch liegen dortige
 Bind-Mount-Daten, etwa Home-Assistant-Konfiguration und Dashboard-Datenbank, auf
 der SD-Karte. Docker-Named-Volumes liegen dagegen im Docker-Datenverzeichnis auf
 USB. Ein USB-Backup allein deckt die Service-Daten daher nicht vollständig ab.
+
+Seit 20. September 2026 verwendet der Pi ausschließlich den eingebauten LAN-Port
+`eth0`. Der frühere USB-Netzwerkadapter `eth1` und die LAN-Bridge `br0` sind
+deaktiviert. Das Profil `onboard-lan` übernimmt MAC-Adresse und DHCP-Kennung des
+alten Adapters, damit die FRITZ!Box weiterhin dieselbe IP vergibt. Details und
+Profil-Snapshot: [Netzwerkbetrieb](system/NETWORK.md). Das USB-Speicherlaufwerk
+unter `/mnt/usb` ist davon unabhängig und bleibt angeschlossen.
 
 | NAS-Freigabe | Mountpunkt | Verwendung |
 | --- | --- | --- |
@@ -160,8 +167,7 @@ bereinigt; die Löschprotokolle liegen privat unter `backups/cleanup-*.json`.
 ## Automatisierung und Wartung
 
 Die Host-Firewall verwaltet IPv4 und IPv6 mit `iptables-nft` und
-`netfilter-persistent`. LAN-Eingänge sind `eth1` und `br0` (über `eth0`) /
-`192.168.0.0/24`, VPN ist `wg0` /
+`netfilter-persistent`. LAN-Eingang ist `eth0` / `192.168.0.0/24`, VPN ist `wg0` /
 `10.8.0.0/24`. SSH, Home Assistant, Paperless, Grafana und Dashboard sind für LAN
 und VPN freigegeben; Node-RED und go2rtc (18555) nur für LAN. IPv6-Zugriffe sind
 derzeit auf das Link-Local-LAN begrenzt. Prometheus und Exporter sind durch die
@@ -287,6 +293,8 @@ docker compose logs --tail=80 home-dashboard
 Der Neustart am 19. September 2026 wurde erfolgreich geprüft: Firewall vor Docker,
 USB- und NAS-Mounts, WireGuard, alle 13 Container und Timer sind aktiv; eine neue
 LAN-SSH-Verbindung ist hergestellt. Alle 14 Monitoring-Ziele melden „up“.
+Der anschließende Netzwerkwechsel auf `eth0` am 20. September ist live und durch
+neue SSH-Anmeldungen geprüft; ein erneuter Boot ohne USB-Netzwerkadapter steht aus.
 Ein vollständiger Bare-Metal-Wiederaufbau bleibt offen. Für Monitoring fehlt
 ein kompletter Ersatzhost-Installations-/Starttest. Der erfolgreiche Boot mit
 verfügbarem USB/NAS ersetzt keinen Ausfalltest dieser Speichergeräte.

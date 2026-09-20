@@ -35,7 +35,7 @@ def main():
 
         run('ip', 'link', 'set', 'lo', 'up')
         for host, peer, pid, hostip, peerip in [
-            ('eth1', 'client', client, '192.168.0.199/24', '192.168.0.2/24'),
+            ('eth0', 'client', client, '192.168.0.199/24', '192.168.0.2/24'),
             ('br-test', 'container', container, '172.30.0.1/24', '172.30.0.2/24'),
         ]:
             run('ip', 'link', 'add', host, 'type', 'veth', 'peer', 'name', peer)
@@ -46,7 +46,7 @@ def main():
             ns(pid, 'ip', 'link', 'set', peer, 'up')
             ns(pid, 'ip', 'link', 'set', 'lo', 'up')
         ns(container, 'ip', 'route', 'add', 'default', 'via', '172.30.0.1')
-        run('ip', '-6', 'addr', 'add', 'fe80::1/64', 'dev', 'eth1', 'nodad')
+        run('ip', '-6', 'addr', 'add', 'fe80::1/64', 'dev', 'eth0', 'nodad')
         ns(client, 'ip', '-6', 'addr', 'add', 'fe80::2/64', 'dev', 'client', 'nodad')
         Path('/proc/sys/net/ipv4/ip_forward').write_text('1')
         for family in (socket.AF_INET, socket.AF_INET6):
@@ -86,15 +86,14 @@ def main():
         for port in (8000,1880):
             run('iptables', '-t', 'nat', '-A', 'PREROUTING', '-p', 'tcp', '--dport', str(port), '-j', 'DNAT', '--to-destination', f'172.30.0.2:{port}')
             probe('192.168.0.199', port, True)
-        # Regression: LAN packets can enter a bridge instead of the address's
-        # original physical interface. Exercise real bridged host and DNAT paths.
+        # Retired br0 must no longer count as LAN or a trusted Docker bridge.
         run('ip', 'link', 'add', 'br0', 'type', 'bridge')
-        run('ip', 'link', 'set', 'eth1', 'master', 'br0')
-        run('ip', 'addr', 'del', '192.168.0.199/24', 'dev', 'eth1')
+        run('ip', 'link', 'set', 'eth0', 'master', 'br0')
+        run('ip', 'addr', 'del', '192.168.0.199/24', 'dev', 'eth0')
         run('ip', 'addr', 'add', '192.168.0.199/24', 'dev', 'br0')
         run('ip', 'link', 'set', 'br0', 'up')
         for port in (22,1880,3000,3080,8000,8123,18555):
-            probe('192.168.0.199', port, True)
+            probe('192.168.0.199', port, False)
         for port in (80,9090,9100):
             probe('192.168.0.199', port, False)
         # br0 is a LAN bridge, not a trusted Docker br-<id> interface.
