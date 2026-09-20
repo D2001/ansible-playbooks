@@ -8,7 +8,7 @@
 <meta name="viewport"
       content="width=device-width,initial-scale=1">
 
-<title>Home Infrastructure</title>
+<title>Heimnetz · Übersicht</title>
 
 <link rel="stylesheet"
       href="/static/style.css">
@@ -23,8 +23,8 @@
 <header class="header">
 
     <div>
-        <div class="eyebrow">HOME</div>
-        <h1>Infrastructure</h1>
+        <div class="eyebrow">NETZWERK · ZU HAUSE</div>
+        <h1>Heimnetz im Blick</h1>
         <div id="clock"
              class="clock"></div>
     </div>
@@ -40,6 +40,16 @@
 
 </header>
 
+
+<section class="network-panel" aria-labelledby="network-title">
+    <div class="section-head">
+        <div><h2 id="network-title">Netzwerkübersicht</h2>
+        <p class="network-caption">Logische Verbindungen · Status aus den vorhandenen Messungen</p></div>
+        <span class="network-tag">LAN 192.168.0.0/24</span>
+    </div>
+    <p id="network-stale" class="network-stale hidden" role="status">Keine aktuellen Daten. Angezeigte Werte stammen aus der letzten erfolgreichen Abfrage.</p>
+    <div id="network-topology" class="network-topology"><p class="network-caption">Netzwerkdaten werden geladen…</p></div>
+</section>
 
 <section id="domains"
          class="domains"></section>
@@ -93,6 +103,8 @@
 </section>
 
 
+<details class="details-panel">
+<summary>Systemlast &amp; Anwendungsdetails</summary>
 <section class="two-column">
 
 
@@ -138,6 +150,8 @@
 
 </section>
 
+
+</details>
 
 <section class="block backup-block">
 
@@ -360,6 +374,49 @@ function bitrate(value) {
     return `${value} bit/s`;
 }
 
+function escapeText(value) {
+    return String(value ?? "—").replace(/[&<>"']/g, c => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    }[c]));
+}
+
+function renderNetwork(data) {
+    const system = name => data.systems.find(x => x.name === name) || {state: "unknown"};
+    const wg = data.paperless_path.find(x => x.name === "WireGuard") || {state: "unknown"};
+    const labels = {ok: "OK", warning: "Prüfen", error: "Störung", unknown: "Unbekannt", off: "Nicht aktiv", starting: "Startet"};
+    const card = (name, address, state, description, value, extra="") => {
+        state = Object.hasOwn(labels, state) ? state : "unknown";
+        return `<article class="net-device ${state}">
+            <div class="net-device-head"><strong>${escapeText(name)}</strong><span class="net-status">${dot(state)}${labels[state]}</span></div>
+            <div class="net-address">${escapeText(address)}</div>
+            <div class="net-description">${escapeText(description)}</div>
+            <div class="net-value">${escapeText(value)}</div>${extra}</article>`;
+    };
+    const pi = system("Raspberry Pi"), nas = system("EX4100"), pc = system("MSI Workstation");
+    const router = system("FRITZ!Box"), vps = system("VPS");
+    const wake = pc.mode === "off" ? '<button class="wol-button" onclick="wakeWorkstation(this)">PC einschalten</button>' : "";
+    $("network-topology").innerHTML = `
+        <div class="net-uplink">
+            ${card("Internet", "Externe Erreichbarkeit", data.internet.state, "ICMP-Prüfungen vom Pi", `${fmt(data.internet.latency, " ms")} · ${fmt(data.internet.loss, "%")} Verlust`)}
+            <div class="net-connector" aria-label="Internet über den Router">↔<small>WAN</small></div>
+            ${card("FRITZ!Box", "192.168.0.1", router.state, "Gateway · Status des WAN-Links", `↓ ${bitrate(data.internet.wan_rx)} · ↑ ${bitrate(data.internet.wan_tx)}`)}
+        </div>
+        <div class="net-branches">
+            <section class="net-lan"><h3><span class="branch-mark">└</span> Heimnetz <small>über die FRITZ!Box</small></h3>
+                <div class="net-lan-devices">
+                    ${card("Raspberry Pi 5", "192.168.0.199 · eth0", pi.state, "Home Assistant · Paperless · Node-RED", pi.primary)}
+                    ${card("NAS · EX4100", "192.168.0.7", nas.state, "Dateifreigaben · Backups", nas.primary)}
+                    ${card("MSI Workstation", "192.168.0.195", pc.state, "Arbeitsplatz · Wake-on-LAN", pc.mode === "off" ? "Keine aktive Telemetrie" : pc.primary, wake)}
+                </div>
+            </section>
+            <section class="net-vpn"><h3><span class="branch-mark">↔</span> VPN <small>vom Pi zum VPS</small></h3>
+                <div class="net-tunnel"><span>${dot(wg.state)} WireGuard · ${stateText(wg.state)}</span><small>Handshake vor ${fmt(data.wireguard_age, " s")}</small></div>
+                ${card("VPS", "10.8.0.1 ↔ Pi 10.8.0.2", vps.state, "Traefik · öffentlicher Paperless-Zugang", vps.primary)}
+            </section>
+        </div>
+        <p class="network-caption net-footnote">Gerätestatus fasst die vorhandenen Messungen zusammen. Physische Switch-Ports und Kabelwege sind nicht erfasst.</p>`;
+}
+
 
 function renderDomains(data) {
 
@@ -427,7 +484,7 @@ function renderDomains(data) {
                     x => x.state === "ok"
                 ).length} / ${data.services.length}`,
             small:
-                "HA · Paperless · Node-RED · XMLTV"
+                "HA · Paperless · Node-RED"
         },
 
         {
@@ -1193,6 +1250,7 @@ function render(data) {
     `;
 
 
+    renderNetwork(data);
     renderDomains(data);
     renderFindings(data);
     renderDiagnostic(data);
@@ -1246,7 +1304,8 @@ async function refresh() {
             await fetch(
                 "/api/status",
                 {
-                    cache: "no-store"
+                    cache: "no-store",
+                    signal: AbortSignal.timeout(12000)
                 }
             );
 
@@ -1258,11 +1317,18 @@ async function refresh() {
         const data =
             await response.json();
 
+        if (!Number.isFinite(data.timestamp) || Date.now() / 1000 - data.timestamp > 60)
+            throw new Error("Stale dashboard data");
         render(data);
+        $("network-stale").classList.add("hidden");
+        document.body.classList.remove("data-stale");
 
     }
 
     catch (error) {
+
+        $("network-stale").classList.remove("hidden");
+        document.body.classList.add("data-stale");
 
         const overall =
             $("overall");
