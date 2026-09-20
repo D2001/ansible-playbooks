@@ -31,7 +31,7 @@ h2 { font-size: 18px; font-weight: 550; letter-spacing: -.3px; }
 .subnet, .address { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; color: var(--muted); }
 .subnet { border: 1px solid var(--border); padding: 5px 9px; border-radius: 6px; }
 .topology { padding: 12px 26px 26px; background-image: radial-gradient(#34413e 0.7px, transparent 0.7px); background-size: 16px 16px; }
-.uplink, .lan-devices, .vpn-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; position: relative; }
+.wan-route, .lan-devices { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; position: relative; }
 .node { position: relative; min-width: 0; padding: 12px 15px; background: var(--card); border: 1px solid #3c4c49; border-radius: 10px; color: var(--text); }
 .node-heading { gap: 8px; }
 .node-icon { width: 21px; height: 21px; fill: none; stroke: var(--accent); stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; flex: 0 0 auto; }
@@ -39,22 +39,23 @@ h2 { font-size: 18px; font-weight: 550; letter-spacing: -.3px; }
 .node .role { font-size: 11px; color: var(--muted); margin-top: 5px; }
 .node-bottom { font-size: 11px; gap: 6px; margin-top: 6px; color: #cbd8d2; flex-wrap: wrap; }
 .node.pi { border-color: #78916d; background: #25332b; }
-.internet::after { content: ''; position: absolute; top: 50%; left: 100%; width: 20px; border-top: 1px solid var(--line); }
-.traffic { padding: 15px 0 10px 10px; display: flex; flex-direction: column; justify-content: center; gap: 8px; }
-.traffic p { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 1px; }
-.traffic span { font: 15px ui-monospace, monospace; }
-.traffic small { font-size: 10px; color: var(--muted); }
-.lan-bus { position: relative; height: 65px; }
-.lan-bus::before { content: ''; position: absolute; left: 50%; top: 0; height: 65px; border-left: 1px solid var(--line); }
-.lan-bus::after { content: ''; position: absolute; left: calc((100% - 36px) / 6); right: calc((100% - 36px) / 6); top: 40px; height: 25px; border: 1px solid var(--line); border-bottom: 0; border-radius: 6px 6px 0 0; }
-.lan-bus span { position: absolute; top: 9px; left: calc(50% + 12px); color: var(--muted); font-size: 10px; background: var(--panel); padding: 0 5px; }
-.vpn-row .node { grid-column: 2; }
-.tunnel { margin: 0 auto; position: relative; width: max-content; max-width: 100%; padding: 18px 12px 18px 24px; min-height: 68px; font-size: 11px; }
-.tunnel::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; border-left: 1px dashed var(--accent); }
-.tunnel small { display: block; margin-top: 2px; font-size: 10px; color: var(--muted); }
-.vpn-connection { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
-.vpn-connection > div { grid-column: 2; padding-left: 50%; overflow: visible; }
-.vpn-connection .tunnel { min-width: 175px; margin: 0; }
+/* Internet transport and LAN are connected through the router, not the VPS. */
+.wan-route .router::after, .wan-route .internet::after { content: ''; position: absolute; top: 50%; left: 100%; width: 20px; border-top: 1px solid var(--line); }
+.node-metrics { display: flex; flex-wrap: wrap; gap: 5px 12px; margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--border); font: 11px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; color: #d8e4dd; }
+.node-metrics span { overflow-wrap: anywhere; }
+.lan-bus { position: relative; height: 58px; }
+.lan-bus::before { content: ''; position: absolute; left: calc((100% - 36px) / 6); top: 0; height: 58px; border-left: 1px solid var(--line); }
+.lan-bus::after { content: ''; position: absolute; left: calc((100% - 36px) / 6); right: calc((100% - 36px) / 6); top: 34px; height: 24px; border-top: 1px solid var(--line); border-right: 1px solid var(--line); border-radius: 0 6px 0 0; }
+.lan-bus span { position: absolute; top: 7px; left: calc((100% - 36px) / 6 + 12px); color: var(--muted); font-size: 10px; background: var(--panel); padding: 0 5px; }
+.lan-devices .nas::before { content: ''; position: absolute; left: 50%; top: -25px; height: 24px; border-left: 1px solid var(--line); }
+.tunnel-summary { margin-top: 22px; padding: 14px 16px; border: 1px dashed #728965; border-radius: 8px; background: #19241f; }
+.tunnel-heading { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.tunnel-heading > span:last-child, .tunnel-summary p { color: var(--muted); font-size: 11px; }
+.tunnel-summary p { margin-top: 10px; }
+.tunnel-route { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); list-style: none; padding: 0; margin: 14px 0 0; gap: 22px; }
+.tunnel-route li { position: relative; font-size: 12px; }
+.tunnel-route li:not(:last-child)::after { content: '↔'; position: absolute; right: -14px; top: 5px; color: var(--accent); }
+.tunnel-route small { display: block; color: var(--muted); font-size: 10px; }
 .map-caption { padding: 12px 24px; border-top: 1px solid var(--border); font-size: 10px; color: var(--muted); flex-wrap: wrap; gap: 6px; }
 .map-caption > span:first-child { display: flex; align-items: center; gap: 7px; }
 .legend-line { width: 16px; border-top: 1px solid var(--line); display: inline-block; }
@@ -135,29 +136,21 @@ footer > span:first-child { letter-spacing: 1px; }
   .header-status > .badge { white-space: normal; max-width: 165px; font-size: 10px; padding: 5px 8px; }
   #updated { font-size: 10px; }
   .map-panel > .panel-head { padding: 18px 16px 0; flex-wrap: wrap; gap: 8px; }
-  .uplink { grid-template-columns: 1fr 1fr; gap: 14px; }
-  .traffic { grid-column: 1 / -1; flex-direction: row; flex-wrap: wrap; padding: 6px 0; align-items: center; gap: 8px 14px; }
-  .traffic small { display: none; }
-  .traffic span { font-size: 13px; }
-  .internet::after { width: 16px; }
-  .lan-bus { height: 32px; margin-left: 12px; border-left: 1px solid var(--line); }
+  .wan-route { display: flex; flex-direction: column; gap: 26px; }
+  .wan-route .vps { order: 0; }
+  .wan-route .internet { order: 1; }
+  .wan-route .router { order: 2; }
+  .wan-route .router::after { display: none; }
+  .wan-route .internet::after, .wan-route .vps::after { content: ''; position: absolute; left: 24px; top: 100%; height: 27px; width: 0; border: 0; border-left: 1px solid var(--line); }
+  .lan-bus { height: 32px; margin-left: 24px; border-left: 1px solid var(--line); }
   .lan-bus::before, .lan-bus::after { display: none; }
   .lan-bus span { left: 12px; top: 6px; }
-  .lan-devices { grid-template-columns: 1fr; gap: 12px; margin-left: 12px; padding-left: 18px; border-left: 1px solid var(--line); }
-  .lan-devices .node::before { content: ''; position: absolute; width: 19px; left: -19px; top: 25px; border-top: 1px solid var(--line); }
-  .lan-devices .node { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; }
-  .lan-devices .workstation { order: 0; }
-  .lan-devices .nas { order: 1; }
-  .lan-devices .pi { order: 2; }
-  .lan-devices .node-heading { grid-column: 1 / -1; }
-  .lan-devices .node h3 { margin-top: 7px; }
-  .lan-devices .address { grid-column: 1; }
-  .lan-devices .role { grid-column: 1; margin-top: 3px; }
-  .lan-devices .node-bottom { grid-column: 2; grid-row: 3 / 5; justify-content: flex-end; align-content: center; max-width: 130px; }
-  .vpn-connection { display: block; margin-left: 30px; }
-  .vpn-connection > div { padding-left: 0; }
-  .vpn-row { display: block; margin-left: 30px; }
-  .vpn-row .node { padding: 14px; }
+  .lan-devices { grid-template-columns: 1fr; gap: 12px; margin-left: 24px; padding-left: 18px; border-left: 1px solid var(--line); }
+  .lan-devices .node::before { content: ''; position: absolute; width: 19px; height: 0; left: -19px; top: 25px; border: 0; border-top: 1px solid var(--line); }
+  .tunnel-summary { padding: 12px; }
+  .tunnel-route { grid-template-columns: 1fr; gap: 20px; }
+  .tunnel-route li { padding-left: 16px; border-left: 1px dashed var(--accent); }
+  .tunnel-route li:not(:last-child)::after { content: '↕'; right: auto; left: 13px; top: 100%; }
   .sidebar, .detail-columns, .charts { grid-template-columns: 1fr; gap: 16px; }
   .backup-strip { gap: 8px 12px; padding: 14px; }
   .backup-strip .backup-note { margin-left: 0; width: 100%; }

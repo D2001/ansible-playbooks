@@ -1,7 +1,10 @@
 # Home dashboard
 
 The homepage is built around a connected network map: Internet/WAN gateway,
-LAN members (Pi on eth0, EX4100 and workstation) and the Pi-to-VPS WireGuard path.
+LAN members (Pi on eth0, EX4100 and workstation) connect to the FRITZ!Box;
+the FRITZ!Box connects via the Internet to the VPS. WireGuard is shown separately
+as an encrypted tunnel over **Pi → FRITZ!Box → Internet → VPS**, with VPN addresses
+only at the Pi and VPS endpoints. There is no direct physical Pi-to-VPS link.
 Applications with direct links and current findings sit alongside the map.
 The former domain tiles and detailed backup matrix have been removed. Backups
 are a single status strip; failures still name the affected backup sets.
@@ -15,7 +18,10 @@ or physical link speed is invented.
 System values, dated recent events, the Paperless diagnostic path and 24-hour
 latency charts share one initially collapsed detail section. Its open state persists
 across polling. Workstation Wake-on-LAN remains available on its network card.
-On narrow screens the LAN nodes stack with the Pi immediately above its VPN path.
+Device cards show existing CPU/RAM/temperature or disk metrics; the router shows
+WAN throughput and the Internet card shows latency/loss. Offline workstations
+show no load readings. On narrow screens the transport path stacks as
+VPS → Internet → FRITZ!Box → LAN, preserving the gateway relationship.
 Missing values display a dash or unknown status; failed/timed-out status requests
 mark the previous display as stale. Unknown telemetry appears in the findings.
 The frontend uses local CSS, SVG icons and vanilla JavaScript (`static/dashboard.js`),

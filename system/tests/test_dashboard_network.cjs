@@ -18,8 +18,8 @@ const context = vm.createContext({document:{getElementById:id => {assert.ok(node
 vm.runInContext(source, context);
 const fixture = {
     timestamp:Date.now()/1000, overall:'ok', domains:{backups:'ok'},
-    systems:[{name:'Raspberry Pi',state:'ok',primary:'CPU 5%'},{name:'EX4100',state:'unknown'},
-        {name:'MSI Workstation',state:'off',mode:'off',action:'wake'},{name:'VPS',state:'ok'},{name:'FRITZ!Box',state:'unknown'}],
+    systems:[{name:'Raspberry Pi',state:'ok',primary:'CPU 5%',secondary:'RAM 22% · 60°C'},{name:'EX4100',state:'unknown'},
+        {name:'MSI Workstation',state:'off',mode:'off',action:'wake',primary:'CPU 99%'},{name:'VPS',state:'ok',primary:'CPU 7%',secondary:'RAM 30% · Disk 62%'},{name:'FRITZ!Box',state:'unknown'}],
     internet:{state:'unknown',latency:12,loss:0,wan_rx:null,wan_tx:2000},
     paperless_path:[{name:'WireGuard',state:'error'}],wireguard_age:200,
     backups:{Paperless:{state:'ok'},Monitoring:{state:'ok'}}, services:[], findings:[]
@@ -28,7 +28,12 @@ context.render(fixture);
 const html = nodes['network-topology'].innerHTML;
 assert.match(html,/192\.168\.0\.199 · eth0/);
 assert.match(html,/10\.8\.0\.1/);
-assert.match(html,/Pi-Endpunkt: 10\.8\.0\.2/);
+assert.match(html,/Services · VPN: 10\.8\.0\.2/);
+const route = html.match(/<ol class="tunnel-route">([\s\S]*?)<\/ol>/)[1];
+assert.match(route, /Pi[\s\S]*FRITZ!Box[\s\S]*Internet[\s\S]*VPS/);
+assert.ok(!html.includes('vpn-row'));
+for (const metric of ['CPU 5%', 'RAM 22%', '60°C', 'CPU 7%', 'Disk 62%']) assert.ok(html.includes(metric));
+assert.ok(!html.includes('CPU 99%')); // offline workstation never displays stale load
 assert.match(html,/WireGuard · Störung/);
 assert.match(html,/PC einschalten/);
 assert.match(html,/Unbekannt/);
@@ -48,6 +53,7 @@ fixture.systems[0].primary='<img src=x onerror=alert(1)>';
 fixture.findings=[{level:'" onclick="oops',title:'<script>bad</script>',detail:'a & b'}];
 context.render(fixture);
 assert.match(nodes.systems.innerHTML,/&lt;img/);
+assert.match(nodes['network-topology'].innerHTML,/&lt;img/);
 assert.ok(!nodes.findings.innerHTML.includes('<script>'));
 assert.ok(!nodes.findings.innerHTML.includes('onclick'));
 context.renderFindings({overall:'unknown',findings:[]});

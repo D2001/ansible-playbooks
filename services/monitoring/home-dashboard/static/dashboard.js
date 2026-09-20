@@ -24,28 +24,35 @@ function renderNetwork(data) {
     const router = system("FRITZ!Box"), vps = system("VPS");
     const wg = (data.paperless_path || []).find(p => p.name === "WireGuard") || {};
     const internet = data.internet || {}, storage = data.storage || {};
+    const metrics = values => `<div class="node-metrics">${values.map(value => `<span>${esc(value)}</span>`).join("")}</div>`;
+    const systemMetrics = system => metrics([system.primary, system.secondary]
+        .flatMap(value => value ? String(value).split(" · ") : [])
+        .slice(0, 4).map(value => value.replace(/None/g, "—")));
     const node = (className, symbol, name, address, state, role, bottom = "") => `
         <article class="node ${className}"><div class="node-heading">${icon(symbol)}${badge(state)}</div>
         <h3>${esc(name)}</h3><div class="address">${esc(address)}</div><p class="role">${esc(role)}</p>
-        ${bottom ? `<div class="node-bottom">${bottom}</div>` : ""}</article>`;
+        ${bottom}</article>`;
     const wake = pc.mode === "off" && pc.action === "wake"
-        ? `<button class="wol-button" onclick="wakeWorkstation(this)" ${waking ? "disabled" : ""}>PC einschalten</button>` : "";
+        ? `<div class="node-bottom"><button class="wol-button" onclick="wakeWorkstation(this)" ${waking ? "disabled" : ""}>PC einschalten</button></div>` : "";
     const pcNote = pc.mode === "off" ? "Keine aktive Telemetrie" : pc.mode === "starting" ? "Wird gestartet…" : "Arbeitsplatz";
     // Internet state includes ICMP AND router telemetry; don't label it ICMP-only.
     $("network-topology").innerHTML = `
-        <div class="uplink">
-            ${node("internet", "globe", "Internet", "WAN / externe Ziele", internet.state, "Internet & Router-Telemetrie", esc(`${fmt(internet.latency, " ms")} · ${fmt(internet.loss, "%")} Verlust`))}
-            ${node("router", "router", "FRITZ!Box", "192.168.0.1", router.state, "Gateway · WAN-Link")}
-            <div class="traffic"><p>WAN-Datenrate</p><span>↓ ${esc(bitrate(internet.wan_rx))}</span><span>↑ ${esc(bitrate(internet.wan_tx))}</span><small>Aktueller Durchsatz</small></div>
+        <div class="wan-route" aria-label="FRITZ!Box über Internet zum VPS">
+            ${node("router", "router", "FRITZ!Box", "192.168.0.1", router.state, "LAN-Gateway · WAN-Link", metrics([`↓ ${bitrate(internet.wan_rx)}`, `↑ ${bitrate(internet.wan_tx)}`]))}
+            ${node("internet", "globe", "Internet", "WAN / externe Ziele", internet.state, "Erreichbarkeit & Router-Telemetrie", metrics([`Latenz ${fmt(internet.latency, " ms")}`, `Verlust ${fmt(internet.loss, "%")}`]))}
+            ${node("vps", "cloud", "VPS", "VPN: 10.8.0.1", vps.state, "Im Internet · Traefik / Paperless", systemMetrics(vps))}
         </div>
         <div class="lan-bus"><span>LAN · FRITZ!Box</span></div>
         <div class="lan-devices">
-            ${node("nas", "server", "NAS · EX4100", "192.168.0.7", nas.state, "Dateien & Sicherungen", esc(`${fmt(storage.used_tb)} / ${fmt(storage.total_tb)} TB`))}
-            ${node("pi", "server", "Raspberry Pi 5", "192.168.0.199 · eth0", pi.state, "Services & Monitoring")}
-            ${node("workstation", "desktop", "MSI Workstation", "192.168.0.195", pc.state, pcNote, wake)}
+            ${node("pi", "server", "Raspberry Pi 5", "192.168.0.199 · eth0", pi.state, "Services · VPN: 10.8.0.2", systemMetrics(pi))}
+            ${node("nas", "server", "NAS · EX4100", "192.168.0.7", nas.state, "Dateien & Sicherungen", metrics([`${fmt(storage.used_tb)} / ${fmt(storage.total_tb)} TB`, `Belegt ${fmt(storage.used, "%")}`, `Gehäuse ${fmt(storage.temp, "°C")}`, `HDD ${fmt(storage.disk1_temp, "°C")} / ${fmt(storage.disk2_temp, "°C")}`]))}
+            ${node("workstation", "desktop", "MSI Workstation", "192.168.0.195", pc.state, pcNote, (pc.mode === "online" ? systemMetrics(pc) : "") + wake)}
         </div>
-        <div class="vpn-connection"><div><div class="tunnel">${badge(wg.state, `WireGuard · ${labels[safeState(wg.state)]}`)}<small>Pi ↔ VPS · Handshake ${esc(fmt(data.wireguard_age, " s"))}</small></div></div></div>
-        <div class="vpn-row">${node("vps", "cloud", "VPS", "10.8.0.1", vps.state, "Traefik · Paperless-Zugang", "Pi-Endpunkt: 10.8.0.2")}</div>`;
+        <section class="tunnel-summary" aria-label="WireGuard über LAN und Internet">
+            <div class="tunnel-heading">${badge(wg.state, `WireGuard · ${labels[safeState(wg.state)]}`)}<span>Letzter Handshake vor ${esc(fmt(data.wireguard_age, " s"))}</span></div>
+            <ol class="tunnel-route"><li>Pi <small>10.8.0.2</small></li><li>FRITZ!Box <small>LAN → WAN</small></li><li>Internet <small>Transportweg</small></li><li>VPS <small>10.8.0.1</small></li></ol>
+            <p>Verschlüsselter Tunnel zwischen Pi und VPS über diesen Weg. Die FRITZ!Box leitet den Verkehr weiter.</p>
+        </section>`;
 }
 
 function renderServices(data) {
